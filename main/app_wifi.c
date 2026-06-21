@@ -17,6 +17,7 @@ static const char *TAG = "wifi";
 #define WIFI_FAIL_BIT       BIT1
 
 static EventGroupHandle_t s_wifi_events;
+static bool s_wifi_started = false;
 
 static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -55,17 +56,15 @@ bool app_wifi_has_credentials(void)
     return strlen(ssid) > 0;
 }
 
-/* Assumes nvs_flash_init()/esp_netif_init()/esp_event_loop_create_default()
- * have already been called by app_main() (shared with the provisioning
- * path, which needs them too before app_wifi_start() is even called). */
+/* Assumes nvs_flash_init()/esp_netif_init()/esp_event_loop_create_default()/
+ * esp_netif_create_default_wifi_sta()/esp_wifi_init() have already been
+ * called by app_main() (shared with the provisioning path, which needs
+ * them too before app_wifi_start() is even called — calling esp_wifi_init()
+ * twice in the same boot panics). */
 esp_err_t app_wifi_start(void)
 {
-    esp_netif_create_default_wifi_sta();
-
     s_wifi_events = xEventGroupCreate();
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT,   IP_EVENT_STA_GOT_IP, event_handler, NULL));
 
@@ -87,9 +86,18 @@ esp_err_t app_wifi_start(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+    s_wifi_started = true;
 
     ESP_LOGI(TAG, "connecting to SSID: %s", ssid);
     return ESP_OK;
+}
+
+/* True once esp_wifi_start() has been called this boot (by app_wifi_start()).
+ * Lets app_provision.c know whether it needs to esp_wifi_stop() before
+ * reconfiguring into AP+STA mode for the captive portal. */
+bool app_wifi_is_started(void)
+{
+    return s_wifi_started;
 }
 
 void app_wifi_wait_connected(void)

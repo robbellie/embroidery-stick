@@ -4,9 +4,14 @@
 #include <stdint.h>
 #include "esp_err.h"
 
-/* Assumes nvs_flash_init()/esp_netif_init()/esp_event_loop_create_default()
- * have already been called by app_main(). */
+/* Assumes nvs_flash_init()/esp_netif_init()/esp_event_loop_create_default()/
+ * esp_netif_create_default_wifi_sta()/esp_wifi_init() have already been
+ * called by app_main(). */
 esp_err_t app_wifi_start(void);
+
+/* True once esp_wifi_start() has actually called esp_wifi_start() (the
+ * IDF function) this boot. */
+bool      app_wifi_is_started(void);
 void      app_wifi_wait_connected(void);
 
 /* Like app_wifi_wait_connected() but bounded. Returns ESP_OK if connected

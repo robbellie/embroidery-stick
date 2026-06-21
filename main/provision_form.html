@@ -9,9 +9,11 @@
 <h2>Connect your Embroidery Stick to WiFi</h2>
 <form method="POST" action="/save">
   <label for="ssid">Network:</label><br>
-  <select id="ssid" name="ssid" required style="width:100%;padding:0.5em;margin:0.3em 0 1em">
+  <select id="ssid" name="ssid" required style="width:100%;padding:0.5em;margin:0.3em 0 0.3em">
 {{SSID_OPTIONS}}
   </select><br>
+  <a href="/scan" style="font-size:0.85em">Network not listed? Rescan</a>
+  <br><br>
   <label for="password">Password:</label><br>
   <input type="password" id="password" name="password" style="width:100%;padding:0.5em;margin:0.3em 0 1em">
   <br>

@@ -10,6 +10,7 @@
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_event.h"
+#include "esp_wifi.h"
 #include "tinyusb.h"
 #include "soc/gpio_sig_map.h"
 #include "sdkconfig.h"
@@ -168,6 +169,14 @@ void app_main(void)
     ESP_ERROR_CHECK(nvs_ret);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    /* esp_wifi_init() (and the STA netif) must happen exactly once per
+     * boot, shared by both the normal STA path and the provisioning path
+     * — calling it twice (e.g. STA connect times out, falls back into
+     * provisioning) panics the device. */
+    esp_netif_create_default_wifi_sta();
+    wifi_init_config_t wifi_init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_cfg));
 
     /* ---- Decide: provisioning (no creds, or button held) vs normal boot */
     bool button_held = app_button_is_held(CONFIG_EMBROIDERY_BUTTON_HOLD_MS);

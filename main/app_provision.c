@@ -41,13 +41,12 @@ static struct {
 
 /* ---- WiFi AP + scan ----------------------------------------------------- */
 
+/* esp_netif_init()/esp_event_loop_create_default()/esp_wifi_init() and the
+ * STA netif are already set up by app_main() before this is ever called —
+ * doing it again here would panic (esp_wifi_init() called twice). */
 static void softap_start(void)
 {
     esp_netif_create_default_wifi_ap();
-    esp_netif_create_default_wifi_sta(); /* STA iface needed for scanning; never connects */
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     wifi_config_t ap_config = {
         .ap = {
@@ -239,13 +238,34 @@ static void escape_html(const char *in, char *out, size_t out_size)
     out[o] = '\0';
 }
 
+static esp_err_t send_portal_page(httpd_req_t *req);
+
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
-    if (!s.scanned) {
+    /* Retry automatically if the previous scan came up empty (e.g. it ran
+     * too soon after the AP came up) — avoids getting stuck showing a
+     * permanently empty dropdown for the rest of this boot. */
+    if (!s.scanned || s.scan_count == 0) {
         provision_scan();
         s.scanned = true;
     }
+    return send_portal_page(req);
+}
 
+static esp_err_t scan_get_handler(httpd_req_t *req)
+{
+    /* Explicit forced rescan, regardless of cache state. */
+    provision_scan();
+    s.scanned = true;
+
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+static esp_err_t send_portal_page(httpd_req_t *req)
+{
     size_t total_len = (size_t)(provision_form_end - provision_form_start);
     const char *marker = "{{SSID_OPTIONS}}";
     const char *marker_pos = find_marker(provision_form_start, total_len, marker);
@@ -370,6 +390,22 @@ static esp_err_t http_404_handler(httpd_req_t *req, httpd_err_code_t err)
     return ESP_OK;
 }
 
+/* Known OS captive-portal probe paths. Each OS expects a very specific
+ * response (Apple: exact "Success" page; Android: HTTP 204; Windows:
+ * exact "Microsoft Connect Test" text) to conclude there's no captive
+ * portal. Serving our form directly (200 OK, different content) at these
+ * exact paths is the most reliable way to make the OS pop its captive-
+ * portal browser automatically — relying solely on a generic 404 redirect
+ * is not reliable on modern iOS in particular. */
+static const char *kCaptiveProbePaths[] = {
+    "/hotspot-detect.html",       /* Apple */
+    "/library/test/success.html",/* Apple (older) */
+    "/generate_204",             /* Android */
+    "/gen_204",                  /* Android (newer) */
+    "/connecttest.txt",          /* Windows NCSI */
+    "/ncsi.txt",                 /* Windows */
+};
+
 static void httpd_server_start(void)
 {
     esp_log_level_set("httpd_uri", ESP_LOG_ERROR);
@@ -384,10 +420,17 @@ static void httpd_server_start(void)
     ESP_ERROR_CHECK(httpd_start(&server, &config));
 
     httpd_uri_t root = { .uri = "/",     .method = HTTP_GET,  .handler = root_get_handler };
+    httpd_uri_t scan = { .uri = "/scan", .method = HTTP_GET,  .handler = scan_get_handler };
     httpd_uri_t save = { .uri = "/save", .method = HTTP_POST, .handler = save_post_handler };
     httpd_register_uri_handler(server, &root);
+    httpd_register_uri_handler(server, &scan);
     httpd_register_uri_handler(server, &save);
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_404_handler);
+
+    for (size_t i = 0; i < sizeof(kCaptiveProbePaths) / sizeof(kCaptiveProbePaths[0]); i++) {
+        httpd_uri_t probe = { .uri = kCaptiveProbePaths[i], .method = HTTP_GET, .handler = root_get_handler };
+        httpd_register_uri_handler(server, &probe);
+    }
 
     ESP_LOGI(TAG, "captive portal HTTP server started");
 }
@@ -396,6 +439,16 @@ static void httpd_server_start(void)
 
 void app_provision_start(void)
 {
+    /* If app_wifi_start() already ran and is now timing out (wrong
+     * password fallback), WiFi is already started in STA-only mode —
+     * stop it first so softap_start() can cleanly bring it back up in
+     * AP+STA mode. If we never called app_wifi_start() (no stored
+     * credentials / button held), WiFi is only initialized, not started,
+     * and this is a no-op. */
+    if (app_wifi_is_started()) {
+        esp_wifi_stop();
+    }
+
     softap_start();
     httpd_server_start();
     xTaskCreate(dns_redirect_task, "dns_redirect", 4096, NULL, 5, NULL);
