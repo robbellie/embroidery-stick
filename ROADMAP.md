@@ -51,6 +51,21 @@ terminal is disqualified for the public release.
      (matches the existing stdlib-only Go backend) and is simpler to
      reason about for a single LAN.
 
+## Nice to have (not needed for initial release)
+
+3. **Multiple embroidery machines, single shared backend**
+   - Each machine gets its own embroidery stick; all sticks talk to one
+     central backend serving one file directory.
+   - Mostly already supported: `handleConn` in `backend/main.go` already
+     runs per-connection in its own goroutine with its own `sessionFiles`
+     snapshot, and `catalog` access is guarded by a `sync.RWMutex` — so
+     concurrent sticks from different machines can already connect to the
+     same backend without changes.
+   - Remaining open question (not urgent): whether concurrent `READ_FILE`
+     fetches from multiple sticks need any throttling/fairness on the
+     backend side once there's real concurrent load — not a concern at
+     current usage levels.
+
 ## Notes
 
 - Local git history for this project lives in this directory's own `.git`
