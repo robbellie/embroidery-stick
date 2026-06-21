@@ -48,4 +48,49 @@ menu "Embroidery Stick Configuration"
         help
             Volume label shown by the host OS (max 11 chars).
 
+    config EMBROIDERY_BUTTON_GPIO
+        int "Provisioning button GPIO"
+        default 41
+        help
+            GPIO connected to the physical button (active-low). On the
+            AtomS3U this is GPIO41. Hold at boot to force re-provisioning.
+
+    config EMBROIDERY_BUTTON_HOLD_MS
+        int "Button hold time to force provisioning (ms)"
+        default 3000
+        range 500 10000
+
+    config EMBROIDERY_LED_GPIO
+        int "Status LED (WS2812) GPIO"
+        default 35
+        help
+            GPIO driving the onboard WS2812 RGB LED. On the AtomS3U this
+            is GPIO35.
+
+    config EMBROIDERY_STA_CONNECT_TIMEOUT_MS
+        int "STA connect timeout before fallback to provisioning (ms)"
+        default 20000
+        range 5000 120000
+        help
+            If the device cannot connect to the configured WiFi network
+            (e.g. wrong password, AP out of range) within this time after
+            boot, it automatically re-enters provisioning mode rather than
+            hanging forever as an empty USB drive.
+
+    config EMBROIDERY_PROVISION_AP_SSID
+        string "Provisioning AP SSID"
+        default "EmbroideryStick-Setup"
+
+    config EMBROIDERY_PROVISION_AP_PASSWORD
+        string "Provisioning AP password (empty = open network)"
+        default ""
+        help
+            Leave empty for an open (unencrypted) AP — recommended to
+            minimize setup friction for non-technical users.
+
+    config EMBROIDERY_PROVISION_MAX_SCAN
+        int "Max WiFi networks shown in provisioning scan dropdown"
+        default 20
+        range 5 40
+
 endmenu

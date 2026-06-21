@@ -4,4 +4,6 @@ dependencies:
     version: "^1.7.6~1"
     rules:
       - if: "idf_version >=5.0"
+  espressif/led_strip:
+    version: "^3.0.1"
   idf: ">=5.0"

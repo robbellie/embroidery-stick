@@ -28,19 +28,29 @@ terminal is disqualified for the public release.
   `.bin` + backend binaries for Windows/Linux and attach to the GitHub
   release.
 
-## Features (in planning, not yet implemented)
+## Features
 
-1. **WiFi AP provisioning mode**
-   - Hold button at boot → device starts a SoftAP + captive portal
-     (HTML form: scan list of SSIDs + password field).
-   - Credentials saved to NVS, device reboots into STA (client) mode.
-   - Onboard RGB LED indicates mode (e.g. blinking = provisioning, solid =
-     connected) — exact pattern TBD.
+1. **WiFi AP provisioning mode** — implemented (`main/app_provision.c`,
+   `main/app_button.c`, `main/app_led.c`).
+   - Confirmed hardware (official M5Stack docs): button = GPIO41
+     (active-low), onboard WS2812 RGB LED = GPIO35.
+   - No stored SSID, or button held 3s at boot, or STA connect times out
+     (20s default) → device starts an open SoftAP
+     (`EmbroideryStick-Setup`) + captive portal (scanned SSID dropdown +
+     password field, `esp_http_server` + a hand-rolled DNS wildcard
+     responder for auto-popup). Submitting saves credentials via
+     `app_wifi_save_credentials()` and reboots into STA mode.
+   - Status LED: blue blink = provisioning, amber blink = connecting,
+     solid green = connected, solid red = connect error (brief, before
+     falling back to provisioning).
+   - USB MSC only comes up after WiFi is confirmed connected — no drive
+     is presented during provisioning (deliberate; see plan notes).
    - Rejected alternative: ESP-IDF's official `wifi_provisioning`
      component (BLE/protocomm) — built for pairing with a companion app,
      too much moving complexity for a single-user device with no app.
-   - Open item: confirm exact GPIO pins for button + RGB LED on the
-     AtomS3U (not yet verified against hardware docs).
+   - Remaining: physical verification (button hold, LED colors, real
+     phone captive-portal auto-popup on iOS/Android) — see plan at
+     implementation time for the full verification checklist.
 
 2. **Backend auto-discovery**
    - ESP broadcasts a small custom UDP "DISCOVER" packet on the LAN; the

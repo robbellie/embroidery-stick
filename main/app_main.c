@@ -7,6 +7,9 @@
 #include "esp_heap_caps.h"
 #include "esp_rom_gpio.h"
 #include "nvs.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
 #include "tinyusb.h"
 #include "soc/gpio_sig_map.h"
 #include "sdkconfig.h"
@@ -15,6 +18,9 @@
 #include "app_backend_client.h"
 #include "app_cache.h"
 #include "app_virtual_fat.h"
+#include "app_led.h"
+#include "app_button.h"
+#include "app_provision.h"
 #include "embroidery_protocol.h"
 
 static const char *TAG = "main";
@@ -133,6 +139,9 @@ void app_main(void)
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024));
 
+    ESP_ERROR_CHECK(app_led_init());
+    ESP_ERROR_CHECK(app_button_init());
+
 #ifdef CONFIG_EMBROIDERY_STUB_MODE
     /* ---- Stub mode: init disk before USB starts (no VBUS toggle needed) */
     ESP_LOGW(TAG, "STUB MODE enabled");
@@ -150,12 +159,28 @@ void app_main(void)
     ESP_LOGI(TAG, "USB MSC started (%u files)", count);
 
 #else
-    /* ---- Normal mode: start USB with empty disk, fill after WiFi ------- */
-    vfat_init(NULL, 0, CONFIG_EMBROIDERY_VOLUME_LABEL);
-    tinyusb_config_t tusb_cfg = {0};
-    ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
-    ESP_LOGI(TAG, "USB MSC started (empty disk)");
+    /* ---- Platform init shared by both the STA and provisioning paths -- */
+    esp_err_t nvs_ret = nvs_flash_init();
+    if (nvs_ret == ESP_ERR_NVS_NO_FREE_PAGES || nvs_ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs_ret);
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    /* ---- Decide: provisioning (no creds, or button held) vs normal boot */
+    bool button_held = app_button_is_held(CONFIG_EMBROIDERY_BUTTON_HOLD_MS);
+    if (button_held || !app_wifi_has_credentials()) {
+        ESP_LOGI(TAG, "%s — entering WiFi provisioning mode",
+                 button_held ? "button held at boot" : "no stored WiFi credentials");
+        app_led_set_state(APP_LED_STATE_PROVISIONING);
+        app_provision_start();
+        /* unreachable: app_provision_start() ends in esp_restart() */
+    }
+
+    /* ---- Normal mode: connect to WiFi first, USB MSC comes up only after */
+    app_led_set_state(APP_LED_STATE_CONNECTING);
     ESP_ERROR_CHECK(app_wifi_start());
 
     /* Read backend config from NVS (or fall back to Kconfig defaults) */
@@ -170,9 +195,22 @@ void app_main(void)
     ESP_ERROR_CHECK(cache_init(backend_read_file, EMBROIDERY_CHUNK_SIZE,
                                CONFIG_EMBROIDERY_CACHE_SLOTS));
 
-    /* Wait for WiFi then load file list */
     ESP_LOGI(TAG, "Waiting for WiFi...");
-    app_wifi_wait_connected();
+    if (app_wifi_wait_connected_timeout(CONFIG_EMBROIDERY_STA_CONNECT_TIMEOUT_MS) != ESP_OK) {
+        ESP_LOGE(TAG, "STA connect timed out — falling back to provisioning");
+        app_led_set_state(APP_LED_STATE_ERROR);
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        app_led_set_state(APP_LED_STATE_PROVISIONING);
+        app_provision_start();
+        /* unreachable */
+    }
+    app_led_set_state(APP_LED_STATE_CONNECTED);
+
+    /* ---- USB MSC comes up only now that WiFi is confirmed connected --- */
+    vfat_init(NULL, 0, CONFIG_EMBROIDERY_VOLUME_LABEL);
+    tinyusb_config_t tusb_cfg = {0};
+    ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
+    ESP_LOGI(TAG, "USB MSC started (empty disk)");
 
     proto_file_info_t *files = NULL;
     uint16_t count = 0;

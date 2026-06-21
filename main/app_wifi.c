@@ -48,17 +48,18 @@ static void nvs_read_or_default(const char *key, char *buf, size_t size, const c
     }
 }
 
+bool app_wifi_has_credentials(void)
+{
+    char ssid[32] = "";
+    nvs_read_or_default("stassid", ssid, sizeof(ssid), CONFIG_EMBROIDERY_WIFI_SSID);
+    return strlen(ssid) > 0;
+}
+
+/* Assumes nvs_flash_init()/esp_netif_init()/esp_event_loop_create_default()
+ * have already been called by app_main() (shared with the provisioning
+ * path, which needs them too before app_wifi_start() is even called). */
 esp_err_t app_wifi_start(void)
 {
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
 
     s_wifi_events = xEventGroupCreate();
@@ -94,6 +95,13 @@ esp_err_t app_wifi_start(void)
 void app_wifi_wait_connected(void)
 {
     xEventGroupWaitBits(s_wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+}
+
+esp_err_t app_wifi_wait_connected_timeout(uint32_t timeout_ms)
+{
+    EventBits_t bits = xEventGroupWaitBits(s_wifi_events, WIFI_CONNECTED_BIT,
+                                            pdFALSE, pdTRUE, pdMS_TO_TICKS(timeout_ms));
+    return (bits & WIFI_CONNECTED_BIT) ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 bool app_wifi_is_connected(void)

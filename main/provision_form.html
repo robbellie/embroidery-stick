@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Embroidery Stick Setup</title>
+</head>
+<body style="font-family:sans-serif;max-width:400px;margin:2em auto;padding:0 1em">
+<h2>Connect your Embroidery Stick to WiFi</h2>
+<form method="POST" action="/save">
+  <label for="ssid">Network:</label><br>
+  <select id="ssid" name="ssid" required style="width:100%;padding:0.5em;margin:0.3em 0 1em">
+{{SSID_OPTIONS}}
+  </select><br>
+  <label for="password">Password:</label><br>
+  <input type="password" id="password" name="password" style="width:100%;padding:0.5em;margin:0.3em 0 1em">
+  <br>
+  <button type="submit" style="padding:0.6em 1.5em">Connect</button>
+</form>
+<p style="color:#666;font-size:0.85em">Only 2.4GHz networks are shown.</p>
+</body>
+</html>
