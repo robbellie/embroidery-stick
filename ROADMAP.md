@@ -93,6 +93,20 @@ terminal is disqualified for the public release.
      backend side once there's real concurrent load — not a concern at
      current usage levels.
 
+4. **Backend subfolder support**
+   - `catalog.reload()`/`watchDir()` in `backend/main.go` only read the
+     top level of the served directory (`os.ReadDir` doesn't recurse;
+     subfolder entries are skipped via `e.IsDir()`). For now the README
+     just recommends keeping the served folder small instead (embroidery
+     machines tend to fetch a thumbnail per visible file, which gets
+     slow over WiFi with many files at once).
+   - Would let users organize a large file collection into subfolders
+     while still serving a manageable number of files to the machine at
+     a time. Needs a decision on how nested files are presented on the
+     virtual disk (flatten with a name prefix? actual subdirectories in
+     the virtual FAT, which `app_virtual_fat.c` doesn't support today
+     either) before implementing.
+
 ## Notes
 
 - Local git history for this project lives in this directory's own `.git`
