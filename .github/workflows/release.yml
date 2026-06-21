@@ -35,6 +35,41 @@ jobs:
           name: firmware
           path: dist/
 
+  # Publishes the just-built firmware to docs/ on master, served via
+  # GitHub Pages, so the ESP Web Tools install page (docs/index.html)
+  # always offers the latest release. Files are served from the same
+  # origin as the manifest to avoid cross-origin/CORS issues that come
+  # up when a manifest points straight at GitHub Releases assets.
+  publish-pages:
+    needs: firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: docs/firmware
+      - name: Set manifest version to this tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}" python3 -c '
+          import json, os
+          with open("docs/manifest.json") as f:
+              m = json.load(f)
+          m["version"] = os.environ["VERSION"]
+          with open("docs/manifest.json", "w") as f:
+              json.dump(m, f, indent=2)
+              f.write("\n")
+          '
+      - name: Commit and push to master
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/firmware docs/manifest.json
+          git diff --cached --quiet || git commit -m "Publish firmware ${GITHUB_REF_NAME} for ESP Web Tools"
+          git push origin HEAD:master
+
   backend:
     runs-on: ubuntu-latest
     strategy:

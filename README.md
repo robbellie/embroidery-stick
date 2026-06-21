@@ -42,7 +42,13 @@ that hardware to test with directly.
 
 ### 1. Flash the firmware
 
-*(Browser-based flashing via [ESP Web Tools](https://esphome.github.io/esp-web-tools/) is planned — for now, build from source, see below.)*
+Open **[robbellie.github.io/embroidery-stick](https://robbellie.github.io/embroidery-stick/)**
+in Chrome or Edge, plug in the stick, and click install. No software to
+install — flashing happens straight from the browser via
+[ESP Web Tools](https://esphome.github.io/esp-web-tools/) (WebSerial,
+so Firefox/Safari aren't supported).
+
+(Or build from source, see below.)
 
 ### 2. First-time WiFi setup
 

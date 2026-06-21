@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flash the Embroidery Stick</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+</head>
+<body style="font-family:sans-serif;max-width:600px;margin:3em auto;padding:0 1em;line-height:1.5">
+<h1>Flash the Embroidery Stick firmware</h1>
+<p>
+  Works in <strong>Chrome or Edge</strong> on a computer with a USB
+  port (WebSerial isn't supported in Firefox/Safari). No software
+  install needed.
+</p>
+<ol>
+  <li>Plug the stick into a USB port.</li>
+  <li>Click the button below.</li>
+  <li>Pick the right serial port when prompted, then follow the on-screen steps.</li>
+</ol>
+<p>
+  <esp-web-install-button manifest="./manifest.json"></esp-web-install-button>
+</p>
+<p style="color:#666;font-size:0.9em">
+  First time? After flashing, hold the button on the stick for 3 seconds
+  at power-on to set up WiFi — see the
+  <a href="https://github.com/robbellie/embroidery-stick#quick-start">README</a>.
+</p>
+<p>
+  <a href="https://github.com/robbellie/embroidery-stick">Source on GitHub</a>
+</p>
+</body>
+</html>
