@@ -1,0 +1,7 @@
+version: '0.1.0'
+dependencies:
+  espressif/esp_tinyusb:
+    version: "^1.7.6~1"
+    rules:
+      - if: "idf_version >=5.0"
+  idf: ">=5.0"

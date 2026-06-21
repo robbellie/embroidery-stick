@@ -1,0 +1,51 @@
+menu "Embroidery Stick Configuration"
+
+    config EMBROIDERY_BACKEND_HOST
+        string "Backend hostname or IP"
+        default "192.168.1.100"
+        help
+            Hostname or IP address of the backend server.
+            Can be overridden at runtime via NVS key "backhost".
+
+    config EMBROIDERY_BACKEND_PORT
+        int "Backend TCP port"
+        default 7892
+        range 1 65535
+        help
+            TCP port of the backend server.
+            Can be overridden at runtime via NVS key "backport".
+
+    config EMBROIDERY_WIFI_SSID
+        string "Default WiFi SSID"
+        default ""
+        help
+            Default WiFi SSID (used if no NVS config present).
+
+    config EMBROIDERY_WIFI_PASSWORD
+        string "Default WiFi password"
+        default ""
+        help
+            Default WiFi password (used if no NVS config present).
+
+    config EMBROIDERY_CACHE_SLOTS
+        int "Number of cache slots"
+        default 8
+        range 4 64
+        help
+            Number of 8 KB cache slots. Each slot uses 8 KB of internal DRAM.
+            8 slots = 64 KB total cache.
+
+    config EMBROIDERY_STUB_MODE
+        bool "Stub mode (no backend, hardcoded test files)"
+        default n
+        help
+            Enable to test USB MSC without a backend server.
+            Presents a virtual disk with dummy test files.
+
+    config EMBROIDERY_VOLUME_LABEL
+        string "FAT16 volume label"
+        default "EMBROIDERY"
+        help
+            Volume label shown by the host OS (max 11 chars).
+
+endmenu

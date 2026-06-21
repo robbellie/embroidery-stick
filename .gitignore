@@ -1,0 +1,5 @@
+build/
+managed_components/
+backend/embroidery-backend
+sdkconfig
+.vscode/
