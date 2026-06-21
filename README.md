@@ -11,21 +11,23 @@ there on the stick. Add or remove a file in the folder on your computer
 and it shows up on the machine within seconds — no need to unplug
 anything.
 
-## Hobby project — no support commitment
+## Hobby project — basic support, please be patient
 
 This is shared as-is, for free, because it might be useful to someone
 else. It's not a product — I work a full-time job plus a side job, so
-I can't promise support, response times, or ongoing maintenance. Pull
-requests and forks are welcome; please don't expect personalized help.
+I'll try to help with issues when I can, but response times will vary
+and I can't promise a fix on any particular timeline. Pull requests and
+forks are very welcome.
 
 Tested specifically on the **M5Stack AtomS3U**. It will very likely work
 on other ESP32(-S3) boards with native USB (button/LED GPIOs are
 configurable in `menuconfig`), but there are almost certainly
 better-suited devices out there — boards with more RAM in particular
 would allow more/larger cache slots and faster, smoother file serving
-than this one. Feel free to try it on other hardware — I'm not buying
-a drawer full of dev boards to test this myself, my wife already
-thinks I have enough of those.
+than this one. If you want to run this on different hardware, you're
+welcome to dig in and try it yourself — and if it doesn't work and you'd
+like my help debugging it, the most reliable way is to get me a unit of
+that hardware to test with directly.
 
 ## What you need
 
