@@ -15,8 +15,13 @@
   <a href="/scan" style="font-size:0.85em">Network not listed? Rescan</a>
   <br><br>
   <label for="password">Password:</label><br>
-  <input type="password" id="password" name="password" style="width:100%;padding:0.5em;margin:0.3em 0 1em">
+  <input type="password" id="password" name="password" style="width:100%;padding:0.5em;margin:0.3em 0 0.3em">
   <br>
+  <label style="font-size:0.85em">
+    <input type="checkbox" onclick="document.getElementById('password').type = this.checked ? 'text' : 'password'">
+    Show password
+  </label>
+  <br><br>
   <button type="submit" style="padding:0.6em 1.5em">Connect</button>
 </form>
 <p style="color:#666;font-size:0.85em">Only 2.4GHz networks are shown.</p>
