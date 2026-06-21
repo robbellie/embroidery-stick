@@ -440,13 +440,14 @@ static void httpd_server_start(void)
 void app_provision_start(void)
 {
     /* If app_wifi_start() already ran and is now timing out (wrong
-     * password fallback), WiFi is already started in STA-only mode —
-     * stop it first so softap_start() can cleanly bring it back up in
-     * AP+STA mode. If we never called app_wifi_start() (no stored
-     * credentials / button held), WiFi is only initialized, not started,
-     * and this is a no-op. */
+     * password fallback), WiFi is already started in STA-only mode with
+     * its reconnect handler still attached — stop it (and detach the
+     * handler) before softap_start() brings the radio back up in AP+STA
+     * mode. Otherwise the handler keeps fighting the scan for the radio
+     * in the background. If we never called app_wifi_start() (no stored
+     * credentials / button held), this is a no-op. */
     if (app_wifi_is_started()) {
-        esp_wifi_stop();
+        app_wifi_stop();
     }
 
     softap_start();

@@ -12,6 +12,11 @@ esp_err_t app_wifi_start(void);
 /* True once esp_wifi_start() has actually called esp_wifi_start() (the
  * IDF function) this boot. */
 bool      app_wifi_is_started(void);
+
+/* Stops WiFi and detaches the STA reconnect handler — call before
+ * reconfiguring into AP+STA provisioning mode if app_wifi_is_started(). */
+void      app_wifi_stop(void);
+
 void      app_wifi_wait_connected(void);
 
 /* Like app_wifi_wait_connected() but bounded. Returns ESP_OK if connected

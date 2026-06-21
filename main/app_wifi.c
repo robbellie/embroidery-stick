@@ -93,11 +93,25 @@ esp_err_t app_wifi_start(void)
 }
 
 /* True once esp_wifi_start() has been called this boot (by app_wifi_start()).
- * Lets app_provision.c know whether it needs to esp_wifi_stop() before
+ * Lets app_provision.c know whether it needs to app_wifi_stop() before
  * reconfiguring into AP+STA mode for the captive portal. */
 bool app_wifi_is_started(void)
 {
     return s_wifi_started;
+}
+
+/* Stops WiFi and detaches the STA reconnect handler. Without unregistering
+ * it, WIFI_EVENT_STA_START still fires when softap_start() restarts the
+ * radio in AP+STA mode, and the handler keeps calling esp_wifi_connect()
+ * with the stale STA config in the background — that fight over the radio
+ * with esp_wifi_scan_start() is what made the provisioning scan come back
+ * empty after a failed STA connect attempt. */
+void app_wifi_stop(void)
+{
+    esp_event_handler_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID,      event_handler);
+    esp_event_handler_unregister(IP_EVENT,   IP_EVENT_STA_GOT_IP,   event_handler);
+    esp_wifi_stop();
+    s_wifi_started = false;
 }
 
 void app_wifi_wait_connected(void)
