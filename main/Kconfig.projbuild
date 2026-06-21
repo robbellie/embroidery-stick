@@ -2,10 +2,12 @@ menu "Embroidery Stick Configuration"
 
     config EMBROIDERY_BACKEND_HOST
         string "Backend hostname or IP"
-        default "192.168.1.100"
+        default ""
         help
-            Hostname or IP address of the backend server.
-            Can be overridden at runtime via NVS key "backhost".
+            Hostname or IP address of the backend server. Leave empty to
+            auto-discover the backend via UDP broadcast — only set this
+            for a manual override (advanced use / broadcast-hostile
+            networks). Can be overridden at runtime via NVS key "backhost".
 
     config EMBROIDERY_BACKEND_PORT
         int "Backend TCP port"
@@ -92,5 +94,23 @@ menu "Embroidery Stick Configuration"
         int "Max WiFi networks shown in provisioning scan dropdown"
         default 20
         range 5 40
+
+    config EMBROIDERY_DISCOVERY_PORT
+        int "Backend discovery UDP port"
+        default 7891
+        range 1 65535
+        help
+            UDP port the backend's discovery responder listens on.
+            Separate from the TCP control port.
+
+    config EMBROIDERY_DISCOVERY_RETRIES
+        int "Backend discovery broadcast retries"
+        default 5
+        range 1 20
+
+    config EMBROIDERY_DISCOVERY_TIMEOUT_MS
+        int "Backend discovery per-attempt timeout (ms)"
+        default 1000
+        range 200 10000
 
 endmenu

@@ -22,6 +22,7 @@
 #include "app_led.h"
 #include "app_button.h"
 #include "app_provision.h"
+#include "app_discovery.h"
 #include "embroidery_protocol.h"
 
 static const char *TAG = "main";
@@ -59,7 +60,12 @@ static void do_usb_refresh(proto_file_info_t *files, uint16_t count)
 {
     ESP_LOGI(TAG, "USB refresh: detaching");
     usbd_vbus_enable(false);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    /* Long enough that host USB stacks/file managers reliably treat this
+     * as a real disconnect (not a debounced glitch) and actually re-read
+     * the directory on reattach — 50ms was too short for some hosts to
+     * notice at all, leaving the file manager showing a stale listing
+     * until the user manually replugged/refreshed. */
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     cache_invalidate_all();
     vfat_init(files, count, CONFIG_EMBROIDERY_VOLUME_LABEL);
@@ -67,6 +73,45 @@ static void do_usb_refresh(proto_file_info_t *files, uint16_t count)
     ESP_LOGI(TAG, "USB refresh: reattaching");
     usbd_vbus_enable(true);
 }
+
+/* ---- Backend host resolution (auto-discovery) --------------------------- */
+
+#ifndef CONFIG_EMBROIDERY_STUB_MODE
+/* Tracks the backend currently in use, so version_poll_task can detect
+ * when a fresh discovery finds a *different* backend than the one
+ * configured at boot (e.g. the stick was plugged in before the backend
+ * laptop was even running). Manual NVS/Kconfig host override disables
+ * rediscovery entirely. */
+static char     s_backend_host[128];
+static uint16_t s_backend_port;
+static bool     s_backend_manual;
+
+/* No-op if the backend host was manually configured. Otherwise broadcasts
+ * for the backend; if a different host responds than the one currently
+ * in use, reinitializes the backend connection to it. Returns true if a
+ * (re)connect should be retried immediately. */
+static bool try_rediscover_backend(void)
+{
+    if (s_backend_manual) return false;
+
+    char host[64];
+    uint16_t port;
+    if (app_discovery_find_backend(host, sizeof(host), &port) != ESP_OK) {
+        return false;
+    }
+    if (strcmp(host, s_backend_host) == 0 && port == s_backend_port) {
+        return false; /* same backend already in use, nothing to do */
+    }
+
+    ESP_LOGI(TAG, "rediscovered backend at %s:%u (was %s:%u)",
+             host, port, s_backend_host, s_backend_port);
+    backend_deinit();
+    strlcpy(s_backend_host, host, sizeof(s_backend_host));
+    s_backend_port = port;
+    backend_init(s_backend_host, s_backend_port);
+    return true;
+}
+#endif
 
 /* ---- Version polling task ---------------------------------------------- */
 
@@ -79,8 +124,10 @@ static void version_poll_task(void *arg)
      * an unnecessary USB refresh mid-read. */
     uint64_t known_version = 0;
     while (backend_get_version(&known_version) != ESP_OK) {
+        if (try_rediscover_backend()) continue; /* retry immediately against new host */
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+    app_led_set_state(APP_LED_STATE_CONNECTED);
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(VERSION_POLL_MS));
@@ -88,7 +135,12 @@ static void version_poll_task(void *arg)
         if (!app_wifi_is_connected()) continue;
 
         uint64_t new_version = 0;
-        if (backend_get_version(&new_version) != ESP_OK) continue;
+        if (backend_get_version(&new_version) != ESP_OK) {
+            app_led_set_state(APP_LED_STATE_DISCOVERING);
+            try_rediscover_backend();
+            continue;
+        }
+        app_led_set_state(APP_LED_STATE_CONNECTED);
         if (new_version == known_version) continue;
 
         ESP_LOGI(TAG, "backend version changed %llu → %llu, scheduling refresh",
@@ -126,6 +178,25 @@ static void nvs_read_or_default(const char *key, char *buf, size_t size, const c
 
 /* ---- Ejection state ---------------------------------------------------- */
 static bool s_ejected[LOGICAL_DISK_NUM] = {true};
+
+#ifndef CONFIG_EMBROIDERY_STUB_MODE
+/* Clears any manually-pinned backend host/port, re-enabling auto-discovery.
+ * Called when the user explicitly holds the button to re-provision —
+ * "start fresh" should reset backend pinning too, not just WiFi, or a
+ * stale manual override from a previous network setup would silently
+ * keep auto-discovery disabled forever. */
+static void clear_backend_override(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("memory", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, "backhost");
+        nvs_erase_key(h, "backport");
+        nvs_commit(h);
+        nvs_close(h);
+        ESP_LOGI(TAG, "cleared backend host/port override — will auto-discover");
+    }
+}
+#endif
 
 /* ======================================================================== */
 /* app_main                                                                  */
@@ -183,6 +254,9 @@ void app_main(void)
     if (button_held || !app_wifi_has_credentials()) {
         ESP_LOGI(TAG, "%s — entering WiFi provisioning mode",
                  button_held ? "button held at boot" : "no stored WiFi credentials");
+        if (button_held) {
+            clear_backend_override();
+        }
         app_led_set_state(APP_LED_STATE_PROVISIONING);
         app_provision_start();
         /* unreachable: app_provision_start() ends in esp_restart() */
@@ -191,18 +265,6 @@ void app_main(void)
     /* ---- Normal mode: connect to WiFi first, USB MSC comes up only after */
     app_led_set_state(APP_LED_STATE_CONNECTING);
     ESP_ERROR_CHECK(app_wifi_start());
-
-    /* Read backend config from NVS (or fall back to Kconfig defaults) */
-    char backend_host[128];
-    char backend_port_str[8];
-    nvs_read_or_default("backhost", backend_host,     sizeof(backend_host),     CONFIG_EMBROIDERY_BACKEND_HOST);
-    nvs_read_or_default("backport", backend_port_str, sizeof(backend_port_str), "7892");
-    uint16_t backend_port = (uint16_t)atoi(backend_port_str);
-    if (backend_port == 0) backend_port = EMBROIDERY_DEFAULT_PORT;
-
-    ESP_ERROR_CHECK(backend_init(backend_host, backend_port));
-    ESP_ERROR_CHECK(cache_init(backend_read_file, EMBROIDERY_CHUNK_SIZE,
-                               CONFIG_EMBROIDERY_CACHE_SLOTS));
 
     ESP_LOGI(TAG, "Waiting for WiFi...");
     if (app_wifi_wait_connected_timeout(CONFIG_EMBROIDERY_STA_CONNECT_TIMEOUT_MS) != ESP_OK) {
@@ -213,7 +275,38 @@ void app_main(void)
         app_provision_start();
         /* unreachable */
     }
-    app_led_set_state(APP_LED_STATE_CONNECTED);
+
+    /* ---- WiFi is up — resolve the backend (manual NVS override, else
+     * broadcast discovery) before connecting to it. Broadcast discovery
+     * needs a real IP, so this must happen after WiFi connects, not
+     * before. */
+    app_led_set_state(APP_LED_STATE_DISCOVERING);
+
+    char backend_host[128];
+    char backend_port_str[8];
+    nvs_read_or_default("backhost", backend_host,     sizeof(backend_host),     CONFIG_EMBROIDERY_BACKEND_HOST);
+    nvs_read_or_default("backport", backend_port_str, sizeof(backend_port_str), "7892");
+    uint16_t backend_port = (uint16_t)atoi(backend_port_str);
+    if (backend_port == 0) backend_port = EMBROIDERY_DEFAULT_PORT;
+
+    s_backend_manual = (strlen(backend_host) > 0);
+    if (!s_backend_manual) {
+        ESP_LOGI(TAG, "no backend host configured — broadcasting discovery");
+        char discovered_host[64];
+        uint16_t discovered_port;
+        if (app_discovery_find_backend(discovered_host, sizeof(discovered_host), &discovered_port) == ESP_OK) {
+            strlcpy(backend_host, discovered_host, sizeof(backend_host));
+            backend_port = discovered_port;
+        } else {
+            ESP_LOGW(TAG, "backend discovery timed out — will keep retrying in background");
+        }
+    }
+    strlcpy(s_backend_host, backend_host, sizeof(s_backend_host));
+    s_backend_port = backend_port;
+
+    ESP_ERROR_CHECK(backend_init(backend_host, backend_port));
+    ESP_ERROR_CHECK(cache_init(backend_read_file, EMBROIDERY_CHUNK_SIZE,
+                               CONFIG_EMBROIDERY_CACHE_SLOTS));
 
     /* ---- USB MSC comes up only now that WiFi is confirmed connected --- */
     vfat_init(NULL, 0, CONFIG_EMBROIDERY_VOLUME_LABEL);
@@ -226,6 +319,7 @@ void app_main(void)
     if (backend_list_files(&files, &count) == ESP_OK) {
         do_usb_refresh(files, count);
         free(files);
+        app_led_set_state(APP_LED_STATE_CONNECTED);
     } else {
         ESP_LOGW(TAG, "Backend unreachable — presenting empty disk");
     }

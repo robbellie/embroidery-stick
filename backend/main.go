@@ -39,6 +39,14 @@ const (
 	cmdVersion   = byte(0x02)
 	cmdListFiles = byte(0x03)
 	cmdReadFile  = byte(0x04)
+
+	// Backend auto-discovery: one-shot UDP broadcast/reply, separate from
+	// the TCP control connection above. These must match the firmware's
+	// EMBROIDERY_DISCOVERY_MAGIC/EMBROIDERY_DISCOVERY_DEFAULT_PORT in
+	// embroidery_protocol.h — duplicated as matching literals since Go
+	// can't include that C header (same pattern as defaultPort above).
+	discoveryMagic = "EMBROIDERY_DISCOVER_V1"
+	discoveryPort  = 7891
 )
 
 var le = binary.LittleEndian
@@ -56,13 +64,62 @@ type fileEntry struct {
 type catalog struct {
 	mu          sync.RWMutex
 	dir         string
+	allowedExt  map[string]bool // e.g. ".PES" -> true
 	files       []fileEntry
 	diskVersion uint64
 }
 
-func newCatalog(dir string) (*catalog, error) {
-	c := &catalog{dir: dir}
+func newCatalog(dir string, allowedExt map[string]bool) (*catalog, error) {
+	c := &catalog{dir: dir, allowedExt: allowedExt}
 	return c, c.reload()
+}
+
+// defaultExtensionsConfig is written next to the executable on first run
+// if no config file exists yet, so the allowed file types are
+// self-documenting and easy to extend without reading source code.
+const defaultExtensionsConfig = `# Embroidery Stick - allowed file types
+# One extension per line (leading dot optional). Lines starting with #
+# are ignored. Uncomment (or add) the formats your embroidery machine
+# supports — only PES is served by default.
+
+.PES
+# .DST
+# .JEF
+# .EXP
+# .VP3
+# .XXX
+# .HUS
+`
+
+// loadAllowedExtensions reads a simple newline-delimited extension list
+// from path, creating it with defaultExtensionsConfig if it doesn't exist
+// yet. Deliberately not a TOML/YAML/JSON config — stdlib-only, matches
+// the rest of this backend.
+func loadAllowedExtensions(path string) (map[string]bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		if werr := os.WriteFile(path, []byte(defaultExtensionsConfig), 0o644); werr != nil {
+			log.Printf("could not write default %s: %v", path, werr)
+		} else {
+			log.Printf("wrote default file-type config to %s", path)
+		}
+		data = []byte(defaultExtensionsConfig)
+	} else if err != nil {
+		return nil, err
+	}
+
+	allowed := make(map[string]bool)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, ".") {
+			line = "." + line
+		}
+		allowed[strings.ToUpper(line)] = true
+	}
+	return allowed, nil
 }
 
 // reload reads the directory and updates files + diskVersion if anything changed.
@@ -72,13 +129,29 @@ func (c *catalog) reload() error {
 		return fmt.Errorf("readdir %s: %w", c.dir, err)
 	}
 
-	var files []fileEntry
+	// rawEntry holds the truncated-but-not-yet-disambiguated 8.3 name.
+	// The wire protocol's name field (proto_file_info_t.name[13]) is hard
+	// limited to classic 8.3 — the firmware's virtual FAT driver only
+	// builds short directory entries, no VFAT/LFN long names — so two
+	// files that truncate to the same 8 characters need a disambiguating
+	// suffix or they'd be visually indistinguishable on the embroidery
+	// machine (reads still work either way, since each gets its own
+	// file_id and cluster chain, but identical-looking names are
+	// confusing for the user).
+	type rawEntry struct {
+		base string
+		ext  string
+		fi   os.FileInfo
+		path string
+	}
+
+	var raw []rawEntry
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		ext := strings.ToUpper(filepath.Ext(e.Name()))
-		if ext != ".PES" && ext != ".DST" && ext != ".JEF" {
+		if !c.allowedExt[ext] {
 			continue
 		}
 		fi, err := e.Info()
@@ -89,16 +162,42 @@ func (c *catalog) reload() error {
 		if len(base) > 8 {
 			base = base[:8]
 		}
-		fname := base + "." + strings.TrimPrefix(ext, ".")
+		raw = append(raw, rawEntry{
+			base: base,
+			ext:  strings.TrimPrefix(ext, "."),
+			fi:   fi,
+			path: filepath.Join(c.dir, e.Name()),
+		})
+	}
+
+	// Disambiguate truncated names that collide, Windows-short-name style:
+	// first occurrence keeps its plain truncated name, later collisions
+	// get a "~N" suffix carved out of the tail (e.g. TAS_NATU.PES,
+	// TAS_NA~1.PES, TAS_NA~2.PES, ...).
+	seen := make(map[string]int)
+	var files []fileEntry
+	for _, r := range raw {
+		key := r.base + "." + r.ext
+		seen[key]++
+		name := r.base
+		if n := seen[key]; n > 1 {
+			suffix := fmt.Sprintf("~%d", n-1)
+			cut := len(name) - len(suffix)
+			if cut < 0 {
+				cut = 0
+			}
+			name = name[:cut] + suffix
+		}
+		fname := name + "." + r.ext
 
 		var nameArr [13]byte
 		copy(nameArr[:], fname)
 
 		files = append(files, fileEntry{
 			name:  nameArr,
-			size:  uint32(fi.Size()),
-			mtime: uint32(fi.ModTime().Unix()),
-			path:  filepath.Join(c.dir, e.Name()),
+			size:  uint32(r.fi.Size()),
+			mtime: uint32(r.fi.ModTime().Unix()),
+			path:  r.path,
 		})
 	}
 
@@ -287,7 +386,7 @@ func watchDir(dir string, cat *catalog) {
 				continue
 			}
 			ext := strings.ToUpper(filepath.Ext(e.Name()))
-			if ext != ".PES" && ext != ".DST" && ext != ".JEF" {
+			if !cat.allowedExt[ext] {
 				continue
 			}
 			fi, err := e.Info()
@@ -325,20 +424,64 @@ func watchDir(dir string, cat *catalog) {
 	}
 }
 
+// ---- discovery responder ---------------------------------------------------
+
+// runDiscoveryResponder answers UDP broadcast discovery requests from the
+// embroidery stick with this backend's TCP port. The stick's IP isn't
+// needed on the wire — the reply goes straight back to the sender's
+// address via ReadFrom/WriteTo.
+func runDiscoveryResponder(tcpPort int) {
+	conn, err := net.ListenPacket("udp4", fmt.Sprintf(":%d", discoveryPort))
+	if err != nil {
+		log.Printf("discovery: listen failed: %v", err)
+		return
+	}
+	defer conn.Close()
+	log.Printf("discovery responder listening on :%d", discoveryPort)
+
+	buf := make([]byte, 64)
+	for {
+		n, raddr, err := conn.ReadFrom(buf)
+		if err != nil {
+			continue
+		}
+		if string(buf[:n]) != discoveryMagic {
+			continue
+		}
+		resp := make([]byte, len(discoveryMagic)+2)
+		copy(resp, discoveryMagic)
+		le.PutUint16(resp[len(discoveryMagic):], uint16(tcpPort))
+		if _, err := conn.WriteTo(resp, raddr); err != nil {
+			log.Printf("discovery: reply to %s failed: %v", raddr, err)
+			continue
+		}
+		log.Printf("discovery: replied to %s with port %d", raddr, tcpPort)
+	}
+}
+
 // ---- main -----------------------------------------------------------------
 
 func main() {
-	dir := flag.String("dir", ".", "directory with .PES/.DST/.JEF files")
+	dir := flag.String("dir", ".", "directory with embroidery files")
 	port := flag.Int("port", defaultPort, "TCP listen port")
+	extConfig := flag.String("extensions", "extensions.conf", "file listing allowed file extensions (one per line, # to comment out)")
 	flag.Parse()
 
-	cat, err := newCatalog(*dir)
+	allowedExt, err := loadAllowedExtensions(*extConfig)
+	if err != nil {
+		log.Fatalf("extensions config: %v", err)
+	}
+
+	cat, err := newCatalog(*dir, allowedExt)
 	if err != nil {
 		log.Fatalf("catalog: %v", err)
 	}
 
 	// Watch directory for changes every 2 seconds (OS-independent, no dependencies).
 	go watchDir(*dir, cat)
+
+	// Answer backend auto-discovery broadcasts from the embroidery stick.
+	go runDiscoveryResponder(*port)
 
 	// SIGHUP triggers a catalog reload (add/remove files without restart).
 	go func() {

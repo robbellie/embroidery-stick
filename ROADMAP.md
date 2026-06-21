@@ -41,8 +41,9 @@ terminal is disqualified for the public release.
      responder for auto-popup). Submitting saves credentials via
      `app_wifi_save_credentials()` and reboots into STA mode.
    - Status LED: blue blink = provisioning, amber blink = connecting,
-     solid green = connected, solid red = connect error (brief, before
-     falling back to provisioning).
+     cyan blink = WiFi up but backend not confirmed yet, solid green =
+     WiFi + backend both confirmed, solid red = connect error (brief,
+     before falling back to provisioning).
    - USB MSC only comes up after WiFi is confirmed connected — no drive
      is presented during provisioning (deliberate; see plan notes).
    - Rejected alternative: ESP-IDF's official `wifi_provisioning`
@@ -52,14 +53,30 @@ terminal is disqualified for the public release.
      phone captive-portal auto-popup on iOS/Android) — see plan at
      implementation time for the full verification checklist.
 
-2. **Backend auto-discovery**
-   - ESP broadcasts a small custom UDP "DISCOVER" packet on the LAN; the
-     backend listens and replies with its IP + port.
+2. **Backend auto-discovery** — implemented (`main/app_discovery.c`,
+   `backend/main.go`'s `runDiscoveryResponder`).
+   - ESP broadcasts a fixed magic string (`EMBROIDERY_DISCOVER_V1`) to
+     `255.255.255.255` on UDP port 7891 (separate from the TCP control
+     port 7892); the backend's UDP listener replies with its TCP port —
+     the IP is taken from the reply packet's source address, not sent on
+     the wire. Retries a few times with a short per-attempt timeout.
+   - Manual override still works: if NVS key `backhost` is set
+     (`EMBROIDERY_BACKEND_HOST` Kconfig default is now `""`, was a
+     personal dev IP), discovery is skipped entirely. Holding the
+     provisioning button also clears `backhost`/`backport` from NVS, so
+     "start fresh" resets backend pinning, not just WiFi.
+   - `version_poll_task` re-attempts discovery whenever the backend is
+     unreachable (and no manual override is set) and switches to a newly
+     found host automatically — covers "stick powered on before the
+     backend laptop was even running" without a manual reboot.
    - Rejected alternative: mDNS — would require avahi-daemon on the Linux
      host plus the ESP-IDF `mdns` component, and multicast is flaky on
      some routers. Custom UDP broadcast keeps the project dependency-free
      (matches the existing stdlib-only Go backend) and is simpler to
      reason about for a single LAN.
+   - Verified on real hardware: confirmed discovery (not a stale manual
+     override) actually resolves the backend by moving the backend to a
+     different port and watching the LED recover from cyan to green.
 
 ## Nice to have (not needed for initial release)
 
@@ -83,3 +100,18 @@ terminal is disqualified for the public release.
   inside of — see project memory for why).
 - Backend currently only watches a single flat directory (no
   subdirectories) and polls for changes every 2s (see `backend/main.go`).
+- 8.3-truncated filenames that collide (common once there are many files
+  sharing the same first 8 characters) now get a Windows-style `~N`
+  disambiguating suffix instead of silently looking identical on the
+  embroidery machine — reads always worked correctly either way (each
+  file keeps its own `file_id`/cluster chain), this was purely a display
+  ambiguity fix.
+- Allowed file types (`.PES`/`.DST`/`.JEF`/...) are no longer hardcoded —
+  `backend/extensions.conf` (auto-created next to the executable on first
+  run, gitignored) lists them, one per line, `#` to disable. Default is
+  PES-only with the others commented out, since the served directory
+  often also contains non-machine-readable files (images, `.EMB` editing
+  files, etc.) that would otherwise clutter the small virtual disk.
+- `do_usb_refresh()`'s VBUS detach delay is 500ms (was 50ms) — some host
+  USB stacks/file managers debounced the shorter detach as a glitch and
+  never noticed the disk content had changed.

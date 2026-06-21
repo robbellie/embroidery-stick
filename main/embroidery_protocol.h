@@ -14,6 +14,17 @@
 #define EMBROIDERY_MAX_FILES        512
 #define EMBROIDERY_CHUNK_SIZE       (8 * 1024)    /* bytes per READ_FILE request */
 
+/*
+ * Backend auto-discovery: one-shot UDP broadcast/reply, separate from the
+ * TCP control connection above. Request payload is just the magic string;
+ * reply payload is the magic string followed by a uint16_t LE TCP port
+ * (the IP is taken from the reply packet's source address, not the wire).
+ * backend/main.go duplicates these as matching literal constants (same
+ * cross-language pattern already used for EMBROIDERY_DEFAULT_PORT).
+ */
+#define EMBROIDERY_DISCOVERY_MAGIC         "EMBROIDERY_DISCOVER_V1"
+#define EMBROIDERY_DISCOVERY_DEFAULT_PORT  7891
+
 /* Command bytes */
 #define CMD_HELLO                   0x01
 #define CMD_VERSION                 0x02

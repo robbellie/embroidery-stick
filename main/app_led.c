@@ -21,6 +21,7 @@ static const led_pattern_t s_patterns[] = {
     [APP_LED_STATE_OFF]          = { 0,               0,               0,               0,    0   },
     [APP_LED_STATE_PROVISIONING] = { 0,               0,               LED_BRIGHTNESS,  500,  500 },
     [APP_LED_STATE_CONNECTING]   = { LED_BRIGHTNESS,  LED_BRIGHTNESS,  0,               125,  125 },
+    [APP_LED_STATE_DISCOVERING]  = { 0,               LED_BRIGHTNESS,  LED_BRIGHTNESS,  300,  300 },
     [APP_LED_STATE_CONNECTED]    = { 0,               LED_BRIGHTNESS,  0,               0,    0   },
     [APP_LED_STATE_ERROR]        = { LED_BRIGHTNESS,  0,               0,               0,    0   },
 };

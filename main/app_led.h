@@ -4,10 +4,11 @@
 
 typedef enum {
     APP_LED_STATE_OFF,
-    APP_LED_STATE_PROVISIONING,   /* slow blue blink  — AP mode, waiting for setup   */
-    APP_LED_STATE_CONNECTING,     /* fast amber blink — STA connecting               */
-    APP_LED_STATE_CONNECTED,      /* solid green                                     */
-    APP_LED_STATE_ERROR,          /* solid red                                       */
+    APP_LED_STATE_PROVISIONING,   /* slow blue blink  — AP mode, waiting for setup       */
+    APP_LED_STATE_CONNECTING,     /* fast amber blink — STA connecting                   */
+    APP_LED_STATE_DISCOVERING,    /* cyan blink       — WiFi up, backend not confirmed   */
+    APP_LED_STATE_CONNECTED,      /* solid green      — WiFi + backend both confirmed    */
+    APP_LED_STATE_ERROR,          /* solid red                                           */
 } app_led_state_t;
 
 esp_err_t app_led_init(void);
