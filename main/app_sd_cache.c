@@ -49,7 +49,6 @@ static struct {
     sdmmc_card_t *card;
     SemaphoreHandle_t mutex;       /* guards records[]/record_count and catalog[]/catalog_count/generation */
     SemaphoreHandle_t sync_signal;
-    SemaphoreHandle_t sync_done;   /* given once per generation's sync pass finishes (or is abandoned) */
     bool sync_task_started;
 
     sd_cache_record_t *records;
@@ -358,23 +357,21 @@ static void sync_task_fn(void *arg)
         if (snapshot) memcpy(snapshot, s.catalog, sizeof(proto_file_info_t) * count);
         xSemaphoreGive(s.mutex);
         if (count > 0 && !snapshot) {
-            xSemaphoreGive(s.sync_done); /* real alloc failure — don't leave a waiter stuck forever */
-            continue;
+            continue; /* real alloc failure — nothing to do this pass */
         }
 
-        /* Belt-and-suspenders alongside do_usb_refresh()'s
-         * app_sd_cache_wait_for_sync() call (which is the real guarantee:
-         * VBUS stays down until this whole pass finishes) — this also
-         * holds off real SD/network I/O for a few seconds after any USB
-         * activity in the steady state, e.g. a live catalog change while
-         * the drive is already mounted and being read. */
+        /* The drive reattaches as soon as set_catalog() returns, without
+         * waiting for this pass — so this idle-wait is what actually keeps
+         * this task's own SD/network I/O from contending with a real USB
+         * read, both right after a catalog change and steady-state (e.g. a
+         * live catalog change while the drive is already mounted and being
+         * read). */
         while (!app_usb_is_idle() && s.generation == my_gen) {
             vTaskDelay(pdMS_TO_TICKS(200));
         }
         if (s.generation != my_gen) {
             free(snapshot);
-            xSemaphoreGive(s.sync_done); /* abandoned — still don't leave a waiter stuck */
-            continue;
+            continue; /* abandoned for a newer catalog */
         }
 
         /* Pruning stale blobs (unlink) and persisting the index/catalog are
@@ -470,7 +467,6 @@ static void sync_task_fn(void *arg)
             }
         }
         free(snapshot);
-        xSemaphoreGive(s.sync_done);
     }
 }
 
@@ -546,9 +542,8 @@ static esp_err_t do_mount(bool format_if_mount_failed)
 
     if (!s.mutex)       s.mutex       = xSemaphoreCreateMutex();
     if (!s.sync_signal) s.sync_signal = xSemaphoreCreateBinary();
-    if (!s.sync_done)   s.sync_done   = xSemaphoreCreateBinary();
     if (!s.records)     s.records     = calloc(EMBROIDERY_MAX_FILES, sizeof(sd_cache_record_t));
-    if (!s.mutex || !s.sync_signal || !s.sync_done || !s.records) {
+    if (!s.mutex || !s.sync_signal || !s.records) {
         ESP_LOGE(TAG, "out of memory setting up SD cache");
         return ESP_ERR_NO_MEM;
     }
@@ -604,12 +599,12 @@ void app_sd_cache_set_catalog(const proto_file_info_t *files, uint16_t count)
 {
     if (s.state != APP_SD_CACHE_READY) return;
 
-    /* Deliberately RAM-only and fast: this always runs before VBUS is
-     * reasserted (do_usb_refresh() waits on app_sd_cache_wait_for_sync()
-     * right after this call, before touching VBUS at all — see there).
-     * Pruning stale blobs and persisting the index/catalog both involve
-     * real SD-card I/O and are handled by sync_task_fn() instead, so this
-     * function itself stays fast regardless of SD card latency. */
+    /* Deliberately RAM-only and fast: this runs on do_usb_refresh()'s
+     * critical path right before VBUS is reasserted. Pruning stale blobs
+     * and persisting the index/catalog both involve real SD-card I/O and
+     * are handled by sync_task_fn() instead (kicked off below, in the
+     * background), so this function itself stays fast regardless of SD
+     * card latency. */
     xSemaphoreTake(s.mutex, portMAX_DELAY);
     free(s.catalog);
     s.catalog = count ? malloc(sizeof(proto_file_info_t) * count) : NULL;
@@ -622,21 +617,6 @@ void app_sd_cache_set_catalog(const proto_file_info_t *files, uint16_t count)
     s.generation++;
     xSemaphoreGive(s.mutex);
 
-    xSemaphoreTake(s.sync_done, 0);   /* drain any stale completion from a prior generation */
     xSemaphoreGive(s.sync_signal);    /* wake the eager-fill task for the new catalog */
 }
 
-/* Blocks until the sync pass for the most recently set_catalog() finishes
- * (or is abandoned for a newer one), or until timeout_ms elapses. Called
- * by do_usb_refresh() before reasserting VBUS, specifically so the whole
- * SD-card + network sync burst for a catalog change happens entirely
- * while the drive is detached — real SD/SPI/network I/O and USB-MSC
- * enumeration never run concurrently, which is what earlier attempts at
- * pacing/prioritizing around that overlap failed to fully prevent. */
-bool app_sd_cache_wait_for_sync(uint32_t timeout_ms)
-{
-    if (s.state != APP_SD_CACHE_READY || !s.sync_task_started) return true;
-    bool done = xSemaphoreTake(s.sync_done, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
-    if (done) xSemaphoreGive(s.sync_done); /* leave it set; set_catalog() drains it next time */
-    return done;
-}

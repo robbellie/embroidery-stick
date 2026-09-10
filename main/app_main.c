@@ -89,19 +89,16 @@ static void do_usb_refresh(proto_file_info_t *files, uint16_t count)
     cache_invalidate_all();
     vfat_init(files, count, CONFIG_EMBROIDERY_VOLUME_LABEL);
 #ifdef CONFIG_EMBROIDERY_SD_CACHE
+    /* Kicks off the eager-fill sync in the background and returns
+     * immediately — the drive reattaches without waiting for it. Reads for
+     * anything not yet cached just fall through to a live network fetch
+     * (sd_cache_fetch()), so there's no correctness reason to hide the
+     * drive while the cache warms up. (This used to block VBUS on the
+     * whole sync pass, added as a defensive measure during an earlier,
+     * since-root-caused USB stall bug — see git history. sync_task_fn()'s
+     * own idle-based pacing is what actually keeps its SD/network I/O from
+     * contending with real USB reads, not this call.) */
     app_sd_cache_set_catalog(files, count);
-    /* Keep the drive fully detached until the eager-fill sync pass this
-     * just triggered is completely done — real SD-card writes and network
-     * fetches for the new catalog then never run concurrently with
-     * USB-MSC enumeration/reads at all, closing off that whole class of
-     * timing-dependent stall rather than trying to out-schedule it (which
-     * several earlier, narrower attempts — pacing by idle detection,
-     * moving work off the critical path, task priorities — didn't fully
-     * close). Bounded: a stuck/very slow sync (e.g. flaky network) must
-     * not keep the drive from ever appearing at all. */
-    if (!app_sd_cache_wait_for_sync(60000)) {
-        ESP_LOGW(TAG, "SD sync pass didn't finish within timeout — reattaching anyway");
-    }
 #endif
 
     ESP_LOGI(TAG, "USB refresh: reattaching");

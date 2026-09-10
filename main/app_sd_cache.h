@@ -65,20 +65,6 @@ void app_sd_cache_get_stats(uint32_t *hits, uint32_t *misses);
 void app_sd_cache_set_catalog(const proto_file_info_t *files, uint16_t count);
 
 /*
- * Blocks until the eager-fill sync pass triggered by the most recent
- * app_sd_cache_set_catalog() call finishes (or is abandoned for a newer
- * one), or until timeout_ms elapses — whichever first. Returns true if the
- * pass actually finished/was abandoned, false on timeout. A no-op (returns
- * true immediately) when SD caching isn't active.
- *
- * do_usb_refresh() (app_main.c) calls this after app_sd_cache_set_catalog()
- * but before reasserting VBUS, so the real SD-card + network I/O this
- * triggers happens entirely while the drive is detached from the host —
- * never concurrently with USB-MSC enumeration/reads.
- */
-bool app_sd_cache_wait_for_sync(uint32_t timeout_ms);
-
-/*
  * Loads the last catalog persisted by app_sd_cache_set_catalog(), for use
  * when the backend is unreachable at boot — lets the stick present its
  * last-known files (as far as they're actually cached — see
