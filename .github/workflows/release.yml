@@ -173,15 +173,14 @@ jobs:
       - name: Install Linux GUI build dependencies
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libgl-dev libegl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev wayland-protocols
-      - name: Set up MinGW-w64 (Windows)
+      - name: Prefer the runner's own MinGW-w64 (Windows)
         if: matrix.os == 'windows-latest'
-        # windows-latest runners can have more than one gcc on PATH (e.g.
-        # from Strawberry Perl) that isn't a matching 64-bit MinGW-w64
-        # toolchain, which cgo needs — this installs and PATHs a known-good
-        # one explicitly rather than hoping the ambient one is right.
-        uses: egor-tensin/setup-mingw@v2
-        with:
-          platform: x64
+        # windows-latest ships a working 64-bit MinGW-w64 at C:\mingw64\bin,
+        # but it isn't first on PATH — Strawberry Perl's/MSYS2's gcc can
+        # shadow it, and cgo needs the real one. Putting it first is more
+        # reliable than installing a fresh one via a third-party Chocolatey
+        # action, which has been flaky.
+        run: echo "C:\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build
         working-directory: backend
         env:
