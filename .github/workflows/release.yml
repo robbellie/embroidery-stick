@@ -169,7 +169,7 @@ jobs:
           cache: false
       - name: Install Linux GUI build dependencies
         if: matrix.os == 'ubuntu-latest'
-        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libgl-dev libegl1-mesa-dev xorg-dev libxkbcommon-dev
       - name: Build
         working-directory: backend
         env:
