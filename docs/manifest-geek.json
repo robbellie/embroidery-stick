@@ -1,0 +1,15 @@
+{
+  "name": "Embroidery Stick (ESP32-S3-GEEK)",
+  "version": "unreleased",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "firmware/bootloader-geek.bin", "offset": 0 },
+        { "path": "firmware/partition-table-geek.bin", "offset": 32768 },
+        { "path": "firmware/usb_embroidery_stick-geek.bin", "offset": 65536 }
+      ]
+    }
+  ]
+}

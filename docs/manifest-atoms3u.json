@@ -1,0 +1,15 @@
+{
+  "name": "Embroidery Stick (AtomS3U)",
+  "version": "unreleased",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "firmware/bootloader-atoms3u.bin", "offset": 0 },
+        { "path": "firmware/partition-table-atoms3u.bin", "offset": 32768 },
+        { "path": "firmware/usb_embroidery_stick-atoms3u.bin", "offset": 65536 }
+      ]
+    }
+  ]
+}

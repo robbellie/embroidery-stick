@@ -14,32 +14,51 @@ permissions:
   contents: write
 
 jobs:
+  # Two board variants: AtomS3U (the original hardware, no PSRAM, WS2812
+  # LED) and Waveshare ESP32-S3-GEEK (adds an SD card + LCD status
+  # display). sdkconfig.defaults alone targets AtomS3U (the Kconfig
+  # default board choice); the GEEK build layers sdkconfig.defaults.geek
+  # on top via SDKCONFIG_DEFAULTS, which is also where CONFIG_SPIRAM is
+  # explicitly enabled — the GEEK's embedded PSRAM has no per-board
+  # Kconfig default at all, and silently building without it reproduces a
+  # severe, hard-to-diagnose bug (see the comment in that file).
   firmware:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - board: atoms3u
+            defaults: sdkconfig.defaults
+          - board: geek
+            defaults: sdkconfig.defaults;sdkconfig.defaults.geek
     steps:
       - uses: actions/checkout@v4
-      - name: Build firmware
+      - name: Build firmware (${{ matrix.board }})
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v6.0
           target: esp32s3
           path: '.'
+          command: idf.py -D SDKCONFIG_DEFAULTS="${{ matrix.defaults }}" build
       - name: Collect firmware artifacts
         run: |
           mkdir -p dist
-          cp build/usb_embroidery_stick.bin dist/
-          cp build/bootloader/bootloader.bin dist/
-          cp build/partition_table/partition-table.bin dist/
+          cp build/usb_embroidery_stick.bin dist/usb_embroidery_stick-${{ matrix.board }}.bin
+          cp build/bootloader/bootloader.bin dist/bootloader-${{ matrix.board }}.bin
+          cp build/partition_table/partition-table.bin dist/partition-table-${{ matrix.board }}.bin
       - uses: actions/upload-artifact@v4
         with:
-          name: firmware
+          name: firmware-${{ matrix.board }}
           path: dist/
 
   # Publishes the just-built firmware to docs/ on master, served via
   # GitHub Pages, so the ESP Web Tools install page (docs/index.html)
-  # always offers the latest release. Files are served from the same
-  # origin as the manifest to avoid cross-origin/CORS issues that come
-  # up when a manifest points straight at GitHub Releases assets.
+  # always offers the latest release, for both boards. Files are served
+  # from the same origin as the manifests to avoid cross-origin/CORS
+  # issues that come up when a manifest points straight at GitHub
+  # Releases assets. Board-suffixed filenames (from the firmware job)
+  # mean both boards' files can share one flat docs/firmware/ directory
+  # without colliding.
   publish-pages:
     needs: firmware
     runs-on: ubuntu-latest
@@ -49,28 +68,35 @@ jobs:
           ref: master
       - uses: actions/download-artifact@v4
         with:
-          name: firmware
+          name: firmware-atoms3u
           path: docs/firmware
-      - name: Set manifest version to this tag
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware-geek
+          path: docs/firmware
+      - name: Set manifest versions to this tag
         run: |
           VERSION="${GITHUB_REF_NAME#v}" python3 -c '
           import json, os
-          with open("docs/manifest.json") as f:
-              m = json.load(f)
-          m["version"] = os.environ["VERSION"]
-          with open("docs/manifest.json", "w") as f:
-              json.dump(m, f, indent=2)
-              f.write("\n")
+          for path in ("docs/manifest-atoms3u.json", "docs/manifest-geek.json"):
+              with open(path) as f:
+                  m = json.load(f)
+              m["version"] = os.environ["VERSION"]
+              with open(path, "w") as f:
+                  json.dump(m, f, indent=2)
+                  f.write("\n")
           '
       - name: Commit and push to master
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/firmware docs/manifest.json
+          git add docs/firmware docs/manifest-atoms3u.json docs/manifest-geek.json
           git diff --cached --quiet || git commit -m "Publish firmware ${GITHUB_REF_NAME} for ESP Web Tools"
           git push origin HEAD:master
 
-  backend:
+  # Headless CLI: unchanged cross-compile approach, single Linux runner,
+  # CGO_ENABLED=0 — stays free of any GUI toolchain dependency.
+  backend-cli:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -91,7 +117,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version-file: backend/go.mod
           cache: false
       - name: Build
         working-directory: backend
@@ -101,14 +127,65 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           name="embroidery-backend-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
-          go build -o "$name" .
+          go build -o "$name" ./cmd/embroidery-backend
       - uses: actions/upload-artifact@v4
         with:
-          name: backend-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: backend-cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: backend/embroidery-backend-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
 
+  # Desktop GUI: Fyne needs CGo + a real platform GUI toolchain, so each
+  # binary is built natively on its own OS rather than cross-compiled from
+  # one Linux runner. Linux additionally needs GL/X11/Wayland dev headers
+  # that ubuntu-latest doesn't ship by default.
+  backend-gui:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            ext: .exe
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            ext: ''
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            ext: ''
+          # macos-latest runners are Apple Silicon (arm64); this row cross-
+          # builds the Intel binary on the same runner via Xcode's
+          # multi-arch clang. Flagged for verification once CI is live.
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            ext: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+      - name: Install Linux GUI build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev libxkbcommon-dev
+      - name: Build
+        working-directory: backend
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          name="embroidery-backend-gui-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}"
+          go build -o "$name" ./cmd/embroidery-backend-gui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-gui-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: backend/embroidery-backend-gui-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+
   release:
-    needs: [firmware, backend]
+    needs: [firmware, backend-cli, backend-gui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

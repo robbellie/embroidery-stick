@@ -15,12 +15,22 @@
 </p>
 <ol>
   <li>Plug the stick into a USB port.</li>
-  <li>Click the button below.</li>
+  <li>Pick your board below and click its button.</li>
   <li>Pick the right serial port when prompted, then follow the on-screen steps.</li>
 </ol>
+
+<h2>M5Stack AtomS3U</h2>
+<p style="color:#666;font-size:0.9em">The original hardware — WS2812 status LED, no SD card.</p>
 <p>
-  <esp-web-install-button manifest="./manifest.json"></esp-web-install-button>
+  <esp-web-install-button manifest="./manifest-atoms3u.json"></esp-web-install-button>
 </p>
+
+<h2>Waveshare ESP32-S3-GEEK</h2>
+<p style="color:#666;font-size:0.9em">Adds an SD card write-through cache and an on-device status LCD.</p>
+<p>
+  <esp-web-install-button manifest="./manifest-geek.json"></esp-web-install-button>
+</p>
+
 <p style="color:#666;font-size:0.9em">
   First time? After flashing, hold the button on the stick for 3 seconds
   at power-on to set up WiFi — see the
