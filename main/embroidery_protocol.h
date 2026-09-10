@@ -9,10 +9,11 @@
  * All integers little-endian.
  */
 
-#define EMBROIDERY_PROTO_VERSION    1
+#define EMBROIDERY_PROTO_VERSION    2   /* v2: proto_file_info_t widened for directory-tree support */
 #define EMBROIDERY_DEFAULT_PORT     7892
-#define EMBROIDERY_MAX_FILES        512
+#define EMBROIDERY_MAX_FILES        512   /* caps files+directories combined, not files alone */
 #define EMBROIDERY_CHUNK_SIZE       (8 * 1024)    /* bytes per READ_FILE request */
+#define EMBROIDERY_ROOT_PARENT_ID   0xFFFF        /* proto_file_info_t.parent_id: entry lives directly in the root */
 
 /*
  * Backend auto-discovery: one-shot UDP broadcast/reply, separate from the
@@ -54,18 +55,37 @@ typedef struct __attribute__((packed)) {
 } proto_version_resp_t;
 
 /*
- * One file entry in CMD_LIST_FILES response.
- * name: null-terminated, 8.3 format, e.g. "LOGO.DST"
+ * One node (file OR directory) in CMD_LIST_FILES response.
+ *
+ * name: null-terminated, 8.3 format, e.g. "LOGO.DST" or "PATTERNS" (a
+ *       directory's name has no extension part).
+ * size, mtime: 0 for directories — ignore rather than relying on this to
+ *       detect is_dir (a legitimately empty file also has size 0).
+ * id: shared namespace for files AND directories, 0..EMBROIDERY_MAX_FILES-1.
+ * parent_id: id of the containing directory, or EMBROIDERY_ROOT_PARENT_ID
+ *       if this entry lives directly in the root.
+ * is_dir: 0 = file, 1 = directory. CMD_READ_FILE must never be issued for
+ *       a directory's id — a directory's content is synthesized locally
+ *       by the firmware from the tree itself, never fetched.
+ *
+ * Producer ordering contract: every directory node MUST appear in the
+ * response before any child entry that references it via parent_id, so a
+ * consumer can build the tree in a single linear pass with no
+ * forward-reference lookup table.
  */
 typedef struct __attribute__((packed)) {
     char     name[13];
     uint32_t size;
     uint32_t mtime;
-    uint16_t file_id;
+    uint16_t id;
+    uint16_t parent_id;
+    uint8_t  is_dir;
+    uint8_t  reserved[2];   /* pad to a clean 28 bytes; available for future flags */
 } proto_file_info_t;
 /* LIST_FILES response: [uint16_t count][proto_file_info_t × count] */
 
-/* CMD_READ_FILE request payload */
+/* CMD_READ_FILE request payload. file_id must be a proto_file_info_t.id
+ * with is_dir==0 — never a directory's id (see proto_file_info_t above). */
 typedef struct __attribute__((packed)) {
     uint16_t file_id;
     uint32_t offset;

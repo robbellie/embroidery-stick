@@ -1,0 +1,24 @@
+# Additional defaults layered on top of sdkconfig.defaults for the
+# Waveshare ESP32-S3-GEEK board (via -D SDKCONFIG_DEFAULTS=
+# "sdkconfig.defaults;sdkconfig.defaults.geek", see .github/workflows/
+# release.yml and README "Building from source").
+
+CONFIG_EMBROIDERY_BOARD_GEEK=y
+
+# The GEEK's chip is an ESP32-S3R2 — 2MB of embedded PSRAM, Quad mode.
+# CONFIG_SPIRAM has no per-board default anywhere in this project's own
+# Kconfig (unlike EMBROIDERY_STATUS_BACKEND/EMBROIDERY_SD_CACHE/GPIO
+# defaults, which are already conditioned on EMBROIDERY_BOARD_GEEK), so it
+# must be set explicitly here. Leaving it unset is a *severe*, easy-to-miss
+# bug: every heap_caps_malloc(MALLOC_CAP_SPIRAM) call in app_virtual_fat.c
+# silently falls back to scarce internal RAM instead of failing loudly,
+# which works fine for a small served catalog and then fails allocation
+# once the catalog (plus the SD cache's own ~32KB) grows past a threshold
+# — leaving the USB drive permanently uninitialized (every sector read
+# returns "pending" forever, so the host just sees an unresponsive device
+# and resets it). Traced via a UDP-broadcast log sink after ten other
+# scheduling/timing fixes failed to touch it, since the USB-serial console
+# isn't available once the app is running in USB-MSC mode.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_TYPE_AUTO=y

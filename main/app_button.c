@@ -48,3 +48,8 @@ bool app_button_is_held(uint32_t hold_ms)
     ESP_LOGI(TAG, "button held for %lu ms — forcing provisioning", (unsigned long)hold_ms);
     return true;
 }
+
+bool app_button_is_pressed(void)
+{
+    return pressed();
+}

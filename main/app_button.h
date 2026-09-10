@@ -11,3 +11,8 @@ esp_err_t app_button_init(void);
  * either released early (returns false) or held for the full hold_ms
  * (returns true). */
 bool app_button_is_held(uint32_t hold_ms);
+
+/* Instantaneous, non-blocking read of the physical button (active-low) —
+ * for a caller that wants to track its own hold/countdown logic instead
+ * of blocking (see app_sd_format_watch.c). */
+bool app_button_is_pressed(void);

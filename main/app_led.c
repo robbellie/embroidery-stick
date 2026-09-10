@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "app_led.h"
 #include "led_strip.h"
+#include <stdint.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -24,6 +25,7 @@ static const led_pattern_t s_patterns[] = {
     [APP_LED_STATE_DISCOVERING]  = { 0,               LED_BRIGHTNESS,  LED_BRIGHTNESS,  300,  300 },
     [APP_LED_STATE_CONNECTED]    = { 0,               LED_BRIGHTNESS,  0,               0,    0   },
     [APP_LED_STATE_ERROR]        = { LED_BRIGHTNESS,  0,               0,               0,    0   },
+    [APP_LED_STATE_OFFLINE]      = { LED_BRIGHTNESS,  0,               LED_BRIGHTNESS,  0,    0   },
 };
 
 static struct {
@@ -89,4 +91,24 @@ esp_err_t app_led_init(void)
 void app_led_set_state(app_led_state_t state)
 {
     s.state = state;
+}
+
+void app_led_set_info(const char *line1, const char *line2)
+{
+    /* A single WS2812 pixel can't show text — nothing to do. */
+    (void)line1;
+    (void)line2;
+}
+
+void app_led_set_stats(uint32_t sd_hits, uint32_t net_fetches)
+{
+    /* A single WS2812 pixel can't show numbers either. */
+    (void)sd_hits;
+    (void)net_fetches;
+}
+
+void app_led_set_sync_progress(uint16_t files_done, uint16_t files_total)
+{
+    (void)files_done;
+    (void)files_total;
 }

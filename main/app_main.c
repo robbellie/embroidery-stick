@@ -23,6 +23,9 @@
 #include "app_button.h"
 #include "app_provision.h"
 #include "app_discovery.h"
+#include "app_button_watch.h"
+#include "app_sd_cache.h"
+#include "app_usb_activity.h"
 #include "embroidery_protocol.h"
 
 static const char *TAG = "main";
@@ -54,6 +57,22 @@ static bool usb_is_idle(void)
     return (xTaskGetTickCount() * portTICK_PERIOD_MS - s_last_usb_read_ms) > 3000;
 }
 
+/* Treats "the host is about to start enumerating/reading" as activity,
+ * even though no tud_msc_read10_cb() has happened yet — called right
+ * before VBUS is reasserted (do_usb_refresh()) and on tud_mount_cb(), so
+ * app_usb_is_idle() can't fire prematurely from stale/zeroed state and
+ * let background SD-cache I/O contend with the host's own critical
+ * enumeration window. */
+static void mark_usb_activity_now(void)
+{
+    s_last_usb_read_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+}
+
+bool app_usb_is_idle(void)
+{
+    return usb_is_idle();
+}
+
 /* ---- Disk refresh ------------------------------------------------------ */
 
 static void do_usb_refresh(proto_file_info_t *files, uint16_t count)
@@ -69,8 +88,24 @@ static void do_usb_refresh(proto_file_info_t *files, uint16_t count)
 
     cache_invalidate_all();
     vfat_init(files, count, CONFIG_EMBROIDERY_VOLUME_LABEL);
+#ifdef CONFIG_EMBROIDERY_SD_CACHE
+    app_sd_cache_set_catalog(files, count);
+    /* Keep the drive fully detached until the eager-fill sync pass this
+     * just triggered is completely done — real SD-card writes and network
+     * fetches for the new catalog then never run concurrently with
+     * USB-MSC enumeration/reads at all, closing off that whole class of
+     * timing-dependent stall rather than trying to out-schedule it (which
+     * several earlier, narrower attempts — pacing by idle detection,
+     * moving work off the critical path, task priorities — didn't fully
+     * close). Bounded: a stuck/very slow sync (e.g. flaky network) must
+     * not keep the drive from ever appearing at all. */
+    if (!app_sd_cache_wait_for_sync(60000)) {
+        ESP_LOGW(TAG, "SD sync pass didn't finish within timeout — reattaching anyway");
+    }
+#endif
 
     ESP_LOGI(TAG, "USB refresh: reattaching");
+    mark_usb_activity_now();
     usbd_vbus_enable(true);
 }
 
@@ -85,6 +120,15 @@ static void do_usb_refresh(proto_file_info_t *files, uint16_t count)
 static char     s_backend_host[128];
 static uint16_t s_backend_port;
 static bool     s_backend_manual;
+
+/* Set when app_main() fell back to a persisted SD catalog because the
+ * backend was unreachable at boot (see APP_LED_STATE_OFFLINE below).
+ * version_poll_task consumes this the moment the backend actually becomes
+ * reachable, to force a real refresh immediately — otherwise the stale
+ * offline catalog would keep showing until the backend's *content*
+ * happens to change next (its diskVersion comparison has nothing to
+ * compare the offline catalog against), which could be a long time. */
+static volatile bool s_force_next_refresh = false;
 
 /* No-op if the backend host was manually configured. Otherwise broadcasts
  * for the backend; if a different host responds than the one currently
@@ -129,10 +173,33 @@ static void version_poll_task(void *arg)
     }
     app_led_set_state(APP_LED_STATE_CONNECTED);
 
+    if (s_force_next_refresh) {
+        s_force_next_refresh = false;
+        ESP_LOGI(TAG, "backend now reachable — replacing offline-cached catalog with the live one");
+        proto_file_info_t *files = NULL;
+        uint16_t count = 0;
+        if (backend_list_files(&files, &count) == ESP_OK) {
+            while (!usb_is_idle()) vTaskDelay(pdMS_TO_TICKS(500));
+            do_usb_refresh(files, count);
+            free(files);
+        }
+        /* Clears the "Offline mode / showing cached files" text set at
+         * boot — otherwise it stays on screen forever even though the
+         * state (color) above already correctly switched back to
+         * CONNECTED, since nothing else ever resets app_led_set_info(). */
+        app_led_set_info("", "");
+    }
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(VERSION_POLL_MS));
 
         if (!app_wifi_is_connected()) continue;
+
+#ifdef CONFIG_EMBROIDERY_SD_CACHE
+        uint32_t hits = 0, misses = 0;
+        app_sd_cache_get_stats(&hits, &misses);
+        app_led_set_stats(hits, misses);
+#endif
 
         uint64_t new_version = 0;
         if (backend_get_version(&new_version) != ESP_OK) {
@@ -185,6 +252,27 @@ static bool s_ejected[LOGICAL_DISK_NUM] = {true};
  * "start fresh" should reset backend pinning too, not just WiFi, or a
  * stale manual override from a previous network setup would silently
  * keep auto-discovery disabled forever. */
+/* Consumes ("forceprov" is erased immediately, not just read) the flag set
+ * by app_button_watch.c's runtime hold-to-reprovision gesture — the
+ * runtime-safe equivalent of button_held for boards where the button is
+ * GPIO0 and holding it *at boot* would trip the chip into UART download
+ * mode instead of ever reaching this code (see app_button_watch.h). */
+static bool consume_force_provision_flag(void)
+{
+    bool force = false;
+    nvs_handle_t h;
+    if (nvs_open("memory", NVS_READWRITE, &h) == ESP_OK) {
+        uint8_t v = 0;
+        if (nvs_get_u8(h, "forceprov", &v) == ESP_OK && v) {
+            force = true;
+            nvs_erase_key(h, "forceprov");
+            nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    return force;
+}
+
 static void clear_backend_override(void)
 {
     nvs_handle_t h;
@@ -213,6 +301,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(app_led_init());
     ESP_ERROR_CHECK(app_button_init());
+    app_button_watch_start();
 
 #ifdef CONFIG_EMBROIDERY_STUB_MODE
     /* ---- Stub mode: init disk before USB starts (no VBUS toggle needed) */
@@ -249,12 +338,16 @@ void app_main(void)
     wifi_init_config_t wifi_init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&wifi_init_cfg));
 
-    /* ---- Decide: provisioning (no creds, or button held) vs normal boot */
-    bool button_held = app_button_is_held(CONFIG_EMBROIDERY_BUTTON_HOLD_MS);
-    if (button_held || !app_wifi_has_credentials()) {
+    /* ---- Decide: provisioning (no creds, button held, or a runtime hold
+     * requested it via app_button_watch.c) vs normal boot */
+    bool button_held      = app_button_is_held(CONFIG_EMBROIDERY_BUTTON_HOLD_MS);
+    bool force_provision  = consume_force_provision_flag();
+    if (button_held || force_provision || !app_wifi_has_credentials()) {
         ESP_LOGI(TAG, "%s — entering WiFi provisioning mode",
-                 button_held ? "button held at boot" : "no stored WiFi credentials");
-        if (button_held) {
+                 button_held     ? "button held at boot" :
+                 force_provision ? "runtime button hold requested reprovisioning" :
+                                    "no stored WiFi credentials");
+        if (button_held || force_provision) {
             clear_backend_override();
         }
         app_led_set_state(APP_LED_STATE_PROVISIONING);
@@ -305,7 +398,18 @@ void app_main(void)
     s_backend_port = backend_port;
 
     ESP_ERROR_CHECK(backend_init(backend_host, backend_port));
-    ESP_ERROR_CHECK(cache_init(backend_read_file, EMBROIDERY_CHUNK_SIZE,
+
+    /* Always wired to sd_cache_fetch() under CONFIG_EMBROIDERY_SD_CACHE,
+     * regardless of whether the SD card is mounted yet — it falls through
+     * to backend_read_file() on its own until app_sd_cache_init() below
+     * actually succeeds. This is what lets SD mounting be deferred to
+     * after USB is already up (see the comment there for why). */
+#ifdef CONFIG_EMBROIDERY_SD_CACHE
+    cache_fetch_fn_t fetch_fn = sd_cache_fetch;
+#else
+    cache_fetch_fn_t fetch_fn = backend_read_file;
+#endif
+    ESP_ERROR_CHECK(cache_init(fetch_fn, EMBROIDERY_CHUNK_SIZE,
                                CONFIG_EMBROIDERY_CACHE_SLOTS));
 
     /* ---- USB MSC comes up only now that WiFi is confirmed connected --- */
@@ -314,6 +418,21 @@ void app_main(void)
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
     ESP_LOGI(TAG, "USB MSC started (empty disk)");
 
+#ifdef CONFIG_EMBROIDERY_SD_CACHE
+    /* Deliberately mounted here — after USB is already attached and
+     * enumerating as the empty placeholder disk, not before. Extensive
+     * testing traced USB-MSC stalls (host resets, unresponsive reads)
+     * specifically to the SD card being actively mounted, independent of
+     * how much SD/network activity was actually happening at the time;
+     * every attempt at pacing or reprioritizing that activity around USB
+     * timing failed to fix it. Mounting only after USB's own critical
+     * enumeration window has already passed sidesteps that entirely,
+     * regardless of the exact low-level mechanism. */
+    if (app_sd_cache_init() != ESP_OK) {
+        ESP_LOGW(TAG, "SD cache unavailable — serving over the network only for now");
+    }
+#endif
+
     proto_file_info_t *files = NULL;
     uint16_t count = 0;
     if (backend_list_files(&files, &count) == ESP_OK) {
@@ -321,11 +440,36 @@ void app_main(void)
         free(files);
         app_led_set_state(APP_LED_STATE_CONNECTED);
     } else {
-        ESP_LOGW(TAG, "Backend unreachable — presenting empty disk");
+        bool offline_served = false;
+#ifdef CONFIG_EMBROIDERY_SD_CACHE
+        proto_file_info_t *cached_files = NULL;
+        uint16_t cached_count = 0;
+        if (app_sd_cache_present() &&
+            app_sd_cache_load_catalog(&cached_files, &cached_count) == ESP_OK) {
+            ESP_LOGW(TAG, "Backend unreachable at boot — presenting %u file(s) last synced to SD",
+                     cached_count);
+            do_usb_refresh(cached_files, cached_count);
+            free(cached_files);
+            /* Genuinely offline, not just "still discovering" — and staleness
+             * needs to be visible, not silently indistinguishable from a
+             * live connection (see project notes on offline mode). */
+            app_led_set_state(APP_LED_STATE_OFFLINE);
+            app_led_set_info("Offline mode", "showing cached files");
+            s_force_next_refresh = true;
+            offline_served = true;
+        }
+#endif
+        if (!offline_served) {
+            ESP_LOGW(TAG, "Backend unreachable — presenting empty disk");
+        }
     }
 
-    /* Start version polling in background */
-    xTaskCreate(version_poll_task, "ver_poll", 4096, NULL, 3, NULL);
+    /* Start version polling in background. Pinned to CPU0 (away from
+     * TinyUSB's CPU1 — see the matching sync_task_fn pinning in
+     * app_sd_cache.c) since do_usb_refresh() calls from here toggle VBUS
+     * and rebuild the whole virtual FAT — real work that shouldn't be
+     * sharing a core with the USB stack it's about to reattach. */
+    xTaskCreatePinnedToCore(version_poll_task, "ver_poll", 4096, NULL, 3, NULL, 0);
 #endif
 }
 
@@ -336,6 +480,7 @@ void app_main(void)
 void tud_mount_cb(void)
 {
     for (uint8_t i = 0; i < LOGICAL_DISK_NUM; i++) s_ejected[i] = false;
+    mark_usb_activity_now(); /* see do_usb_refresh()'s call for why */
     ESP_LOGI("usb", "mounted");
 }
 

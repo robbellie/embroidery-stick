@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "app_wifi.h"
+#include "app_led.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
 #include "esp_event.h"
@@ -9,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include <string.h>
+#include <stdio.h>
 #include "sdkconfig.h"
 
 static const char *TAG = "wifi";
@@ -18,6 +20,7 @@ static const char *TAG = "wifi";
 
 static EventGroupHandle_t s_wifi_events;
 static bool s_wifi_started = false;
+static char s_ssid[33] = "";   /* set by app_wifi_start(), shown via app_led_set_info() */
 
 static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -26,10 +29,14 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGW(TAG, "disconnected, retrying...");
         xEventGroupClearBits(s_wifi_events, WIFI_CONNECTED_BIT);
+        app_led_set_info(NULL, NULL);
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&e->ip_info.ip));
+        char ip_str[16];
+        snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&e->ip_info.ip));
+        app_led_set_info(s_ssid, ip_str);
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
     }
 }
@@ -77,6 +84,7 @@ esp_err_t app_wifi_start(void)
         ESP_LOGW(TAG, "No SSID configured — WiFi not started");
         return ESP_ERR_NOT_FOUND;
     }
+    strlcpy(s_ssid, ssid, sizeof(s_ssid));
 
     wifi_config_t wifi_cfg = {0};
     strlcpy((char *)wifi_cfg.sta.ssid,     ssid,     sizeof(wifi_cfg.sta.ssid));

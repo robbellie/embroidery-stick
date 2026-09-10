@@ -1,5 +1,36 @@
 menu "Embroidery Stick Configuration"
 
+    choice EMBROIDERY_BOARD
+        prompt "Target board"
+        default EMBROIDERY_BOARD_ATOMS3U
+        help
+            Selects sane defaults (button/LED/LCD GPIOs, status indicator
+            backend) for a known board. Every individual GPIO below can
+            still be overridden regardless of this choice.
+
+        config EMBROIDERY_BOARD_ATOMS3U
+            bool "M5Stack AtomS3U"
+
+        config EMBROIDERY_BOARD_GEEK
+            bool "Waveshare ESP32-S3-GEEK"
+    endchoice
+
+    choice EMBROIDERY_STATUS_BACKEND
+        prompt "Status indicator"
+        default EMBROIDERY_STATUS_BACKEND_LCD if EMBROIDERY_BOARD_GEEK
+        default EMBROIDERY_STATUS_BACKEND_LED
+        help
+            The GEEK has no onboard RGB LED (its GPIO38 is the SD card's
+            CS line, not a status LED) — it has a color LCD instead, which
+            is flood-filled with the state color as a stand-in.
+
+        config EMBROIDERY_STATUS_BACKEND_LED
+            bool "Onboard WS2812 RGB LED"
+
+        config EMBROIDERY_STATUS_BACKEND_LCD
+            bool "Onboard LCD, flood-filled with the status color"
+    endchoice
+
     config EMBROIDERY_BACKEND_HOST
         string "Backend hostname or IP"
         default ""
@@ -52,10 +83,18 @@ menu "Embroidery Stick Configuration"
 
     config EMBROIDERY_BUTTON_GPIO
         int "Provisioning button GPIO"
+        default 41 if EMBROIDERY_BOARD_ATOMS3U
+        default 0  if EMBROIDERY_BOARD_GEEK
         default 41
         help
             GPIO connected to the physical button (active-low). On the
-            AtomS3U this is GPIO41. Hold at boot to force re-provisioning.
+            AtomS3U this is GPIO41, a dedicated button — hold at boot to
+            force re-provisioning. On the ESP32-S3-GEEK this is GPIO0,
+            the BOOT/download-mode strapping pin: holding it *at boot*
+            would make the chip enter UART download mode instead of
+            running the firmware at all, so that gesture doesn't work
+            there. Use a long hold any time *after* boot instead (see
+            app_button_watch.c) — same effect, reboots into provisioning.
 
     config EMBROIDERY_BUTTON_HOLD_MS
         int "Button hold time to force provisioning (ms)"
@@ -64,10 +103,175 @@ menu "Embroidery Stick Configuration"
 
     config EMBROIDERY_LED_GPIO
         int "Status LED (WS2812) GPIO"
+        depends on EMBROIDERY_STATUS_BACKEND_LED
         default 35
         help
             GPIO driving the onboard WS2812 RGB LED. On the AtomS3U this
             is GPIO35.
+
+    config EMBROIDERY_LCD_H_RES
+        int "LCD horizontal resolution (px)"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 240
+
+    config EMBROIDERY_LCD_V_RES
+        int "LCD vertical resolution (px)"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 135
+
+    config EMBROIDERY_LCD_BL_GPIO
+        int "LCD backlight GPIO"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 7
+        help
+            Active-high on the ESP32-S3-GEEK (drives an NPN transistor
+            that sinks the backlight LED's cathode) — flip
+            EMBROIDERY_LCD_BL_ACTIVE_LOW if that assumption is wrong on
+            your panel.
+
+    config EMBROIDERY_LCD_BL_ACTIVE_LOW
+        bool "LCD backlight is active-low"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default n
+
+    config EMBROIDERY_LCD_DC_GPIO
+        int "LCD D/C GPIO"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 8
+
+    config EMBROIDERY_LCD_RST_GPIO
+        int "LCD RESET GPIO"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 9
+
+    config EMBROIDERY_LCD_CS_GPIO
+        int "LCD CS GPIO"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 10
+
+    config EMBROIDERY_LCD_MOSI_GPIO
+        int "LCD MOSI GPIO"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 11
+
+    config EMBROIDERY_LCD_CLK_GPIO
+        int "LCD CLK GPIO"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 12
+
+    config EMBROIDERY_LCD_BGR
+        bool "LCD wants BGR element order (not RGB)"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default y
+        help
+            Confirmed needed on real hardware: with RGB order, a pure
+            blue fill rendered purple. Flip this off if colors look wrong
+            in the other direction after this fix.
+
+    config EMBROIDERY_LCD_SWAP_XY
+        bool "LCD needs X/Y swapped (portrait-native panel, landscape use)"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default y
+        help
+            This class of 1.14" 135x240 ST7789 panel is commonly wired
+            portrait-native and needs swap_xy + mirroring to present
+            correctly at EMBROIDERY_LCD_H_RES x EMBROIDERY_LCD_V_RES
+            (240x135 landscape). Confirmed needed on real hardware: without
+            it, only part of the screen showed drawn content and the rest
+            was uninitialized panel memory.
+
+    config EMBROIDERY_LCD_MIRROR_X
+        bool "LCD needs X mirrored"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default y
+
+    config EMBROIDERY_LCD_MIRROR_Y
+        bool "LCD needs Y mirrored"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default n
+
+    config EMBROIDERY_LCD_X_GAP
+        int "LCD panel x gap (px)"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 40
+        help
+            Some ST7789 panels address more RAM columns/rows than are
+            actually visible and need a gap offset to center the visible
+            area — a common quirk on 1.14"/135x240-class modules. Default
+            is the commonly-cited value for this panel class (as used on
+            similar 1.14" ST7789 boards); adjust if the flood-fill doesn't
+            cover the whole visible screen.
+
+    config EMBROIDERY_LCD_Y_GAP
+        int "LCD panel y gap (px)"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default 53
+
+    config EMBROIDERY_SD_CACHE
+        bool "Cache served files on an SD/TF card"
+        default y if EMBROIDERY_BOARD_GEEK
+        default n
+        help
+            Write-through cache: a file fetched over the network is also
+            written to an SD card as it's fetched, plus a low-priority
+            background task eagerly fills in anything not yet cached, so
+            a repeat read (or the machine's own thumbnail re-scans) is
+            served from local flash instead of round-tripping the
+            network. No-op on boards without a card slot, like the
+            AtomS3U — the RAM cache and network fetch behave exactly as
+            before when this is off.
+
+    config EMBROIDERY_SD_MOSI_GPIO
+        int "SD card MOSI/CMD GPIO"
+        depends on EMBROIDERY_SD_CACHE
+        default 35
+
+    config EMBROIDERY_SD_MISO_GPIO
+        int "SD card MISO/D0 GPIO"
+        depends on EMBROIDERY_SD_CACHE
+        default 37
+
+    config EMBROIDERY_SD_SCK_GPIO
+        int "SD card SCK GPIO"
+        depends on EMBROIDERY_SD_CACHE
+        default 36
+
+    config EMBROIDERY_SD_CS_GPIO
+        int "SD card CS GPIO"
+        depends on EMBROIDERY_SD_CACHE
+        default 34
+        help
+            Confirmed on real hardware: this is GPIO34, the TF slot's DAT3
+            line — in SD-over-SPI mode, DAT3 *is* the CS line per the SD
+            card spec itself (not board-specific). GPIO38 (DAT2) is
+            unused/floating in SPI mode and was wrongly used here
+            originally, from a schematic misread — that pin-only bug was
+            the entire cause of every SD mount failure seen on this board,
+            not a hardware fault (confirmed by cross-checking against
+            espp/ws-s3-geek's working pin mapping on the same hardware).
+
+    config EMBROIDERY_LCD_COLOR_SELFTEST
+        bool "LCD color self-test at boot (RED/GREEN/BLUE/WHITE, 2s each)"
+        depends on EMBROIDERY_STATUS_BACKEND_LCD
+        default n
+        help
+            Temporary diagnostic aid while calibrating a new panel: shows
+            unambiguous known primary colors before the normal status
+            state machine takes over, so a wrong color mapping can be
+            confirmed independent of WiFi/backend timing. Safe to turn
+            off once calibration (EMBROIDERY_LCD_BGR etc.) is confirmed
+            correct — it just adds ~8s to boot.
+
+    config EMBROIDERY_SD_FORMAT_HOLD_MS
+        int "Button hold time to format an unreadable SD card (ms)"
+        depends on EMBROIDERY_SD_CACHE && EMBROIDERY_STATUS_BACKEND_LCD
+        default 10000
+        range 3000 30000
+        help
+            Deliberately longer than EMBROIDERY_BUTTON_HOLD_MS (WiFi
+            reprovisioning) since this erases the card, not just settings.
+            Only armed while the screen is showing "SD needs format" —
+            never a global gesture.
 
     config EMBROIDERY_STA_CONNECT_TIMEOUT_MS
         int "STA connect timeout before fallback to provisioning (ms)"

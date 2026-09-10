@@ -248,7 +248,9 @@ esp_err_t backend_stub_init(proto_file_info_t **files_out, uint16_t *count_out)
         strlcpy(files[i].name, names[i], sizeof(files[i].name));
         files[i].size    = pes_size;
         files[i].mtime   = 1700000000u + i * 86400u;
-        files[i].file_id = i;
+        files[i].id      = i;
+        files[i].is_dir  = false;
+        files[i].parent_id = EMBROIDERY_ROOT_PARENT_ID;
     }
     *files_out = files;
     *count_out = n;
