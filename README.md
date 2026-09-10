@@ -19,34 +19,46 @@ I'll try to help with issues when I can, but response times will vary
 and I can't promise a fix on any particular timeline. Pull requests and
 forks are very welcome.
 
-Tested specifically on the **M5Stack AtomS3U**. It will very likely work
-on other ESP32(-S3) boards with native USB (button/LED GPIOs are
+Tested on two boards — the **M5Stack AtomS3U** and the **Waveshare
+ESP32-S3-GEEK** — see [What you need](#what-you-need) below. It will very
+likely work on other ESP32(-S3) boards with native USB too (GPIOs are
 configurable in `menuconfig`), but there are almost certainly
-better-suited devices out there — boards with more RAM in particular
-would allow more/larger cache slots and faster, smoother file serving
-than this one. If you want to run this on different hardware, you're
-welcome to dig in and try it yourself — and if it doesn't work and you'd
-like my help debugging it, the most reliable way is to get me a unit of
-that hardware to test with directly.
+better-suited devices out there. If you want to run this on different
+hardware, you're welcome to dig in and try it yourself — and if it doesn't
+work and you'd like my help debugging it, the most reliable way is to get
+me a unit of that hardware to test with directly.
 
 ## What you need
 
-- An ESP32-S3 board with native USB — this project targets the
-  [M5Stack AtomS3U](https://docs.m5stack.com/en/core/AtomS3U) (button on
-  GPIO41, RGB LED on GPIO35; both configurable in `menuconfig` if you use
-  a different board).
-- A computer on the same WiFi network/LAN as the embroidery machine, to
-  run the backend program on.
+An ESP32-S3 board with native USB. Two are supported out of the box —
+pick whichever you have (or already own):
+
+- **[M5Stack AtomS3U](https://docs.m5stack.com/en/core/AtomS3U)** — the
+  original hardware. WS2812 RGB status LED, no SD card. Button on GPIO41,
+  LED on GPIO35.
+- **[Waveshare ESP32-S3-GEEK](https://www.waveshare.com/wiki/ESP32-S3-GEEK)**
+  — adds an SD card write-through cache (files stay available even if
+  your computer/backend goes offline) and a small on-device status LCD
+  instead of just an LED.
+
+Both are configured via a Kconfig board choice (`idf.py menuconfig` →
+"Embroidery Stick Configuration" → "Board"), so the same source tree
+builds either firmware — see [Building from source](#building-from-source).
+Porting to a different board is just a matter of setting the right GPIOs
+there.
+
+A computer on the same WiFi network/LAN as the embroidery machine, to
+run the backend program on, either way.
 
 ## Quick start
 
 ### 1. Flash the firmware
 
 Open **[robbellie.github.io/embroidery-stick](https://robbellie.github.io/embroidery-stick/)**
-in Chrome or Edge, plug in the stick, and click install. No software to
-install — flashing happens straight from the browser via
-[ESP Web Tools](https://esphome.github.io/esp-web-tools/) (WebSerial,
-so Firefox/Safari aren't supported).
+in Chrome or Edge, plug in the stick, pick your board (AtomS3U or GEEK),
+and click install. No software to install — flashing happens straight
+from the browser via [ESP Web Tools](https://esphome.github.io/esp-web-tools/)
+(WebSerial, so Firefox/Safari aren't supported).
 
 (Or build from source, see below.)
 
@@ -71,22 +83,40 @@ address, so "start fresh" resets everything back to automatic.
 ### 3. Run the backend
 
 The backend is a small program that serves your embroidery files over
-the network. Download the binary for your OS from
-[Releases](../../releases) *(coming soon)*, or build it yourself:
+the network — including subfolders, which show up as real folders on
+the stick. Download the binary for your OS from
+[Releases](../../releases) *(coming soon)*, or build it yourself.
+
+**GUI** (recommended for most users): pick a folder, hit Start, done.
 
 ```sh
 cd backend
-go build -o embroidery-backend .
+go build -o embroidery-backend-gui ./cmd/embroidery-backend-gui
+./embroidery-backend-gui
+```
+
+> Building the GUI on Linux needs baseline GL/X11 development headers
+> (present on any normal desktop distro, but not always in a minimal
+> container/CI image): `sudo apt-get install libgl1-mesa-dev xorg-dev libxkbcommon-dev`.
+
+**CLI** (for scripting or headless machines):
+
+```sh
+cd backend
+go build -o embroidery-backend ./cmd/embroidery-backend
 ./embroidery-backend -dir /path/to/your/embroidery/files
 ```
 
-That's it — the stick finds it automatically (UDP broadcast discovery,
+Either way — the stick finds it automatically (UDP broadcast discovery,
 no IP address to type anywhere). On first run, the backend creates an
 `extensions.conf` file next to itself listing which file types it
 serves (only `.PES` by default — edit the file to enable `.DST`, `.JEF`,
 etc.).
 
-## Status LED
+## Status LED (AtomS3U) / status LCD (GEEK)
+
+Same states either way — a color on the AtomS3U's LED, or a color plus a
+short text line on the GEEK's LCD:
 
 | Color / pattern | Meaning |
 |---|---|
@@ -95,6 +125,10 @@ etc.).
 | Cyan, blinking | WiFi connected, looking for the backend |
 | Green, solid | Fully connected — everything's working |
 | Red, solid | WiFi connection failed (briefly, before retrying setup mode) |
+| Magenta, solid (GEEK only) | Backend unreachable at boot — showing files last cached to the SD card |
+
+On the GEEK, the LCD also shows live sync progress ("N/M synced") while
+the SD cache is filling in files it doesn't have yet.
 
 ## Performance tips
 
@@ -108,8 +142,8 @@ thumbnail preview for every file they see in a folder, and on a stick
 like this that means fetching each one over WiFi — the more files
 visible at once, the slower browsing feels on the machine. Move files
 in and out of the served folder as you work, rather than dumping
-everything in at once. (The backend doesn't currently look into
-subfolders — see `ROADMAP.md`.)
+everything in at once. Organizing files into subfolders doesn't help
+with this — the machine still sees everything in the tree.
 
 ## Advanced
 
@@ -128,13 +162,25 @@ Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) (v5.0+)
 for the firmware and [Go](https://go.dev/) (1.21+) for the backend.
 
 ```sh
-# Firmware
+# Firmware — AtomS3U (the Kconfig default board)
 idf.py build
 idf.py -p /dev/ttyACM0 flash
 
+# Firmware — GEEK (layers sdkconfig.defaults.geek on top, same source tree)
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.geek" build
+idf.py -p /dev/ttyACM0 flash
+
 # Backend
-cd backend && go build -o embroidery-backend .
+cd backend
+go build -o embroidery-backend ./cmd/embroidery-backend         # CLI
+go build -o embroidery-backend-gui ./cmd/embroidery-backend-gui # GUI (needs CGo)
 ```
+
+Switching boards this way regenerates `sdkconfig` from scratch each time
+(delete it first if it already exists) — hand-editing an existing
+`sdkconfig`'s board choice directly leaves other board-dependent settings
+(status backend, GPIOs, PSRAM) stuck at their old values, since Kconfig
+defaults only apply when a symbol isn't already set.
 
 See `ROADMAP.md` for the project's design notes and what's still planned.
 
