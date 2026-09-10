@@ -49,7 +49,9 @@ jobs:
         run: go vet ./cmd/embroidery-backend/... ./embroidery/...
       - name: Test
         working-directory: backend
-        run: go test ./...
+        env:
+          CGO_ENABLED: '0'
+        run: go test ./cmd/embroidery-backend/... ./embroidery/...
 
   # Fyne needs CGo + real GL/X11/Wayland headers — a single-platform sanity
   # build here (release.yml's backend-gui job covers the actual
