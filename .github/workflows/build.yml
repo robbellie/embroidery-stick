@@ -65,7 +65,7 @@ jobs:
           go-version-file: backend/go.mod
           cache: false
       - name: Install Linux GUI build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libgl-dev libegl1-mesa-dev xorg-dev libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libgl-dev libegl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev wayland-protocols
       - name: Build
         working-directory: backend
         env:

@@ -95,9 +95,10 @@ go build -o embroidery-backend-gui ./cmd/embroidery-backend-gui
 ./embroidery-backend-gui
 ```
 
-> Building the GUI on Linux needs baseline GL/X11 development headers
-> (present on any normal desktop distro, but not always in a minimal
-> container/CI image): `sudo apt-get install libgl1-mesa-dev xorg-dev libxkbcommon-dev`.
+> Building the GUI on Linux needs baseline GL/X11/Wayland development
+> headers (present on any normal desktop distro, but not on a minimal
+> container/CI image): `sudo apt-get install libgl1-mesa-dev libgl-dev
+> libegl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev wayland-protocols`.
 
 **CLI** (for scripting or headless machines):
 
