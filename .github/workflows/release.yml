@@ -25,6 +25,7 @@ jobs:
   firmware:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - board: atoms3u
@@ -99,6 +100,7 @@ jobs:
   backend-cli:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - goos: windows
@@ -140,6 +142,7 @@ jobs:
   backend-gui:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -170,6 +173,15 @@ jobs:
       - name: Install Linux GUI build dependencies
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libgl-dev libegl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev wayland-protocols
+      - name: Set up MinGW-w64 (Windows)
+        if: matrix.os == 'windows-latest'
+        # windows-latest runners can have more than one gcc on PATH (e.g.
+        # from Strawberry Perl) that isn't a matching 64-bit MinGW-w64
+        # toolchain, which cgo needs — this installs and PATHs a known-good
+        # one explicitly rather than hoping the ambient one is right.
+        uses: egor-tensin/setup-mingw@v2
+        with:
+          platform: x64
       - name: Build
         working-directory: backend
         env:
