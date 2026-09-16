@@ -136,6 +136,19 @@ type treeNode struct {
 // Directories are always included, even if empty or containing only
 // disallowed extensions — an empty folder is still a folder.
 func (c *Catalog) buildTree() (*treeNode, error) {
+	// Checked explicitly, separately from the walk below: WalkDir's own
+	// error handling here is deliberately tolerant of a single bad entry
+	// deep in the tree (skip it, keep going — see the walk func below), but
+	// that same tolerance would otherwise also swallow the root itself
+	// being unreadable (wrong/stale path, permissions, a folder picker
+	// handing back a malformed path) as a silent, empty catalog instead of
+	// a real error the caller can show the user.
+	if info, err := os.Stat(c.rootDir); err != nil {
+		return nil, fmt.Errorf("cannot access %s: %w", c.rootDir, err)
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", c.rootDir)
+	}
+
 	allowedExt := c.getAllowedExt()
 	root := &treeNode{isDir: true, path: c.rootDir}
 	byPath := map[string]*treeNode{c.rootDir: root}
