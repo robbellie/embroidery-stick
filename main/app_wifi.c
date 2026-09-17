@@ -94,6 +94,11 @@ esp_err_t app_wifi_start(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+    /* Modem-sleep power save (the default) lets the radio doze between
+     * beacons, adding real per-packet latency to every backend round trip
+     * — a tradeoff meant for battery-powered devices. This stick is always
+     * on USB power, so there's no downside to disabling it. */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
     s_wifi_started = true;
 
     ESP_LOGI(TAG, "connecting to SSID: %s", ssid);

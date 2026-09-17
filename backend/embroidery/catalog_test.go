@@ -202,3 +202,29 @@ func TestDirectoryMtimeSet(t *testing.T) {
 		t.Errorf("directory node should always report size 0, got %d", nodes[0].size)
 	}
 }
+
+// Regression test for a real report: the GUI's folder picker (Fyne, on
+// Windows) hands back a root path that isn't in the OS-native separator
+// form filepath.WalkDir builds child paths with internally. buildTree()'s
+// byPath map is keyed by the exact root string, so an un-normalized root
+// makes every top-level parent lookup fail — each file gets scanned and
+// counted, then silently dropped right before being attached to the tree,
+// producing a catalog with 0 entries and no error. A trailing separator
+// reproduces the same class of mismatch (filepath.Dir/Join both strip it)
+// without needing an actual Windows path. newCatalog() (not exercised by
+// buildCatalog(), which sets rootDir directly) is what's responsible for
+// normalizing it.
+func TestRootDirNormalizedOnConstruction(t *testing.T) {
+	dir := t.TempDir()
+	mustWriteFile(t, filepath.Join(dir, "rose.pes"), 100)
+
+	messyDir := dir + string(filepath.Separator)
+	c, err := newCatalog(messyDir, map[string]bool{".PES": true}, func(string, ...any) {}, nil)
+	if err != nil {
+		t.Fatalf("newCatalog: %v", err)
+	}
+	nodes, _ := c.getState()
+	if len(nodes) != 1 {
+		t.Fatalf("want 1 node from an un-normalized root, got %d", len(nodes))
+	}
+}

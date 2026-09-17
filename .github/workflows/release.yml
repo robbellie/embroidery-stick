@@ -216,3 +216,8 @@ jobs:
         with:
           files: release/*
           generate_release_notes: true
+          # A hyphenated tag (v0.2.1-rc1, v0.2.1-test1, ...) is a
+          # pre-release/test build, per semver convention — flagged so it
+          # never shows as "Latest" and doesn't confuse someone browsing
+          # Releases looking for the real latest version.
+          prerelease: ${{ contains(github.ref_name, '-') }}

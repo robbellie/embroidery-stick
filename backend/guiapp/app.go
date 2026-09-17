@@ -42,7 +42,7 @@ type guiApp struct {
 
 	statusLabel *widget.Label
 	activity    *activityDot
-	logView     *widget.Entry
+	logView     *widget.RichText
 
 	srv *embroidery.Server
 }
@@ -71,9 +71,12 @@ func Run() {
 	g.statusLabel = widget.NewLabel("Idle")
 	g.activity = newActivityDot()
 
-	g.logView = widget.NewMultiLineEntry()
+	// RichText, not a disabled Entry: a disabled Entry renders its text in
+	// the theme's muted/greyed color (meant for "this input is
+	// unavailable"), which made the log unreadable — RichText is a genuine
+	// read-only display widget, so it renders with normal text color.
+	g.logView = widget.NewRichTextWithText("")
 	g.logView.Wrapping = fyne.TextWrapWord
-	g.logView.Disable() // read-only log pane; Fyne has no dedicated read-only text widget
 
 	form := container.NewBorder(nil, nil, widget.NewLabel("Folder:"), g.browseBtn, g.dirEntry)
 	portRow := container.NewBorder(nil, nil, widget.NewLabel("Port:"), g.extBtn, g.portEntry)
@@ -153,8 +156,17 @@ func (g *guiApp) onEditExtensions() {
 
 func (g *guiApp) appendLog(msg string) {
 	fyne.Do(func() {
+		// Appends a new segment instead of rebuilding the whole log text
+		// (String() + re-wrap into one segment) on every single line — that
+		// was O(total log length) per call, so it got measurably slower as
+		// a session went on, entirely avoidable since RichText already
+		// supports multiple segments natively.
 		stamp := time.Now().Format("15:04:05")
-		g.logView.SetText(g.logView.Text + fmt.Sprintf("[%s] %s\n", stamp, msg))
+		g.logView.Segments = append(g.logView.Segments, &widget.TextSegment{
+			Style: widget.RichTextStyleInline,
+			Text:  fmt.Sprintf("[%s] %s\n", stamp, msg),
+		})
+		g.logView.Refresh()
 	})
 }
 

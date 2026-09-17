@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +67,27 @@ func (s *Server) logf(format string, args ...any) {
 	log.Printf(format, args...)
 }
 
+// Logs exactly which extensions.conf the CLI/GUI resolved (as an absolute
+// path — ExtConfigPath is normally relative, so the CLI and GUI can
+// silently end up reading two different files if launched from different
+// working directories) and what's actually enabled in it. Added after a
+// real report of the GUI silently serving 0 files from a folder the CLI
+// served fine from the same machine, with no visible reason why.
+func (s *Server) logExtConfig(allowedExt map[string]bool) {
+	abs, err := filepath.Abs(s.cfg.ExtConfigPath)
+	if err != nil {
+		abs = s.cfg.ExtConfigPath
+	}
+	var enabled []string
+	for ext, on := range allowedExt {
+		if on {
+			enabled = append(enabled, ext)
+		}
+	}
+	sort.Strings(enabled)
+	s.logf("extensions config: %s (enabled: %s)", abs, strings.Join(enabled, ", "))
+}
+
 // New validates cfg, loads the extensions file, and builds the initial
 // catalog. It does not bind any network resources yet — call Start() for
 // that. Replaces the previous log.Fatalf-on-error CLI behavior with
@@ -86,6 +109,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("extensions config: %w", err)
 	}
+	s.logExtConfig(allowedExt)
 
 	cat, err := newCatalog(cfg.Dir, allowedExt, s.logf, cfg.OnFileDetected)
 	if err != nil {
@@ -259,18 +283,62 @@ func (s *Server) handleConn(conn net.Conn) {
 	// firmware/network changes (WiFi power-save, TCP_NODELAY, chunk size,
 	// ...) — logged once a file's bytes are fully accounted for, so an A/B
 	// comparison is just: reflash, transfer the same file, compare the
-	// logged KB/s. Deliberately a simple running sum (not tracking exact
-	// byte ranges) — good enough for a controlled benchmark run, where a
-	// file isn't normally read out of order or partially more than once;
-	// not meant as a precise production metric.
+	// logged KB/s. transferSeenOffsets dedupes by request offset before
+	// adding to transferBytes: embroidery machines commonly read a file
+	// twice (once for a quick thumbnail/listing pass, once for real use),
+	// and a plain running sum double-counts that overlap — which could
+	// cross entry.size early, report "complete" mid-transfer, delete the
+	// tracking state, and then never see the real transfer's tail end
+	// finish (a file that never gets logged as complete despite the
+	// machine visibly still reading it).
 	transferStart := map[uint16]time.Time{}
 	transferBytes := map[uint16]uint32{}
+	transferSeenOffsets := map[uint16]map[uint32]bool{}
+
+	// Diagnoses whether a slow multi-file transfer is us being slow to
+	// respond, or the client (embroidery machine or OS) simply not asking
+	// for the next chunk yet — nothing in this server throttles or delays a
+	// response once a request arrives, so any real gap can only mean the
+	// client hadn't sent the next request. lastFrameAt is set as soon as a
+	// frame is read, before any processing, so the measured gap is purely
+	// "time with nothing incoming," not our own handling time.
+	const readFileIdleLogThreshold = 50 * time.Millisecond
+	lastFrameAt := time.Now()
+
+	// Aggregates a whole "browsing burst" — e.g. the embroidery machine (or
+	// a host OS) reading through many files back-to-back while generating
+	// thumbnails for a folder — into one summary line, since the per-file
+	// lines above only ever show one file at a time. The protocol has no
+	// explicit "I'm done browsing" signal, so a burst is heuristically
+	// considered over once the connection goes quiet for batchIdleThreshold
+	// — long enough not to be mistaken for a between-file pause, short
+	// enough to close out promptly once browsing has actually stopped.
+	const batchIdleThreshold = 3 * time.Second
+	var batchStart time.Time
+	batchBytes := uint32(0)
+	batchFiles := map[uint16]bool{}
+
+	logBatch := func() {
+		if batchStart.IsZero() || len(batchFiles) == 0 {
+			return
+		}
+		elapsed := time.Since(batchStart)
+		kbps := float64(batchBytes) / 1024 / elapsed.Seconds()
+		s.logf("%s: batch complete: %d files, %d bytes in %v, %.1f KB/s average",
+			addr, len(batchFiles), batchBytes, elapsed.Round(time.Millisecond), kbps)
+		batchStart = time.Time{}
+		batchBytes = 0
+		batchFiles = map[uint16]bool{}
+	}
+	defer logBatch() // flush a still-open batch if the connection just closes
 
 	for {
 		cmd, payload, err := readFrame(conn)
 		if err != nil {
 			return
 		}
+		gapSinceLastFrame := time.Since(lastFrameAt)
+		lastFrameAt = time.Now()
 
 		switch cmd {
 		case cmdHello:
@@ -316,6 +384,10 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.logf("%s: LIST_FILES -> %d entries", addr, len(sessionNodes))
 
 		case cmdReadFile:
+			if gapSinceLastFrame > readFileIdleLogThreshold {
+				s.logf("%s: idle %v before this request (client hadn't asked yet)",
+					addr, gapSinceLastFrame.Round(time.Millisecond))
+			}
 			if len(payload) < 10 {
 				s.logf("%s: READ_FILE payload too short", addr)
 				return
@@ -364,10 +436,23 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.logf("%s: READ_FILE id=%d offset=%d len=%d -> %d bytes", addr, id, offset, length, n)
 
 			if n > 0 {
+				if !batchStart.IsZero() && gapSinceLastFrame > batchIdleThreshold {
+					logBatch() // this request starts a new burst — close out the previous one first
+				}
+				if batchStart.IsZero() {
+					batchStart = time.Now()
+				}
+				batchBytes += uint32(n)
+				batchFiles[id] = true
+
 				if _, started := transferStart[id]; !started {
 					transferStart[id] = time.Now()
+					transferSeenOffsets[id] = map[uint32]bool{}
 				}
-				transferBytes[id] += uint32(n)
+				if !transferSeenOffsets[id][offset] {
+					transferSeenOffsets[id][offset] = true
+					transferBytes[id] += uint32(n)
+				}
 				if transferBytes[id] >= entry.size {
 					elapsed := time.Since(transferStart[id])
 					kbps := float64(transferBytes[id]) / 1024 / elapsed.Seconds()
@@ -375,6 +460,7 @@ func (s *Server) handleConn(conn net.Conn) {
 						addr, splitRelDir(s.cfg.Dir, entry.path), transferBytes[id], elapsed.Round(time.Millisecond), kbps)
 					delete(transferStart, id)
 					delete(transferBytes, id)
+					delete(transferSeenOffsets, id)
 				}
 			}
 
