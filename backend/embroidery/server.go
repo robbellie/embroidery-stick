@@ -283,12 +283,17 @@ func (s *Server) handleConn(conn net.Conn) {
 	// firmware/network changes (WiFi power-save, TCP_NODELAY, chunk size,
 	// ...) — logged once a file's bytes are fully accounted for, so an A/B
 	// comparison is just: reflash, transfer the same file, compare the
-	// logged KB/s. Deliberately a simple running sum (not tracking exact
-	// byte ranges) — good enough for a controlled benchmark run, where a
-	// file isn't normally read out of order or partially more than once;
-	// not meant as a precise production metric.
+	// logged KB/s. transferSeenOffsets dedupes by request offset before
+	// adding to transferBytes: embroidery machines commonly read a file
+	// twice (once for a quick thumbnail/listing pass, once for real use),
+	// and a plain running sum double-counts that overlap — which could
+	// cross entry.size early, report "complete" mid-transfer, delete the
+	// tracking state, and then never see the real transfer's tail end
+	// finish (a file that never gets logged as complete despite the
+	// machine visibly still reading it).
 	transferStart := map[uint16]time.Time{}
 	transferBytes := map[uint16]uint32{}
+	transferSeenOffsets := map[uint16]map[uint32]bool{}
 
 	// Diagnoses whether a slow multi-file transfer is us being slow to
 	// respond, or the client (embroidery machine or OS) simply not asking
@@ -442,8 +447,12 @@ func (s *Server) handleConn(conn net.Conn) {
 
 				if _, started := transferStart[id]; !started {
 					transferStart[id] = time.Now()
+					transferSeenOffsets[id] = map[uint32]bool{}
 				}
-				transferBytes[id] += uint32(n)
+				if !transferSeenOffsets[id][offset] {
+					transferSeenOffsets[id][offset] = true
+					transferBytes[id] += uint32(n)
+				}
 				if transferBytes[id] >= entry.size {
 					elapsed := time.Since(transferStart[id])
 					kbps := float64(transferBytes[id]) / 1024 / elapsed.Seconds()
@@ -451,6 +460,7 @@ func (s *Server) handleConn(conn net.Conn) {
 						addr, splitRelDir(s.cfg.Dir, entry.path), transferBytes[id], elapsed.Round(time.Millisecond), kbps)
 					delete(transferStart, id)
 					delete(transferBytes, id)
+					delete(transferSeenOffsets, id)
 				}
 			}
 
