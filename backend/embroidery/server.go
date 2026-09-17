@@ -290,11 +290,23 @@ func (s *Server) handleConn(conn net.Conn) {
 	transferStart := map[uint16]time.Time{}
 	transferBytes := map[uint16]uint32{}
 
+	// Diagnoses whether a slow multi-file transfer is us being slow to
+	// respond, or the client (embroidery machine or OS) simply not asking
+	// for the next chunk yet — nothing in this server throttles or delays a
+	// response once a request arrives, so any real gap can only mean the
+	// client hadn't sent the next request. lastFrameAt is set as soon as a
+	// frame is read, before any processing, so the measured gap is purely
+	// "time with nothing incoming," not our own handling time.
+	const readFileIdleLogThreshold = 50 * time.Millisecond
+	lastFrameAt := time.Now()
+
 	for {
 		cmd, payload, err := readFrame(conn)
 		if err != nil {
 			return
 		}
+		gapSinceLastFrame := time.Since(lastFrameAt)
+		lastFrameAt = time.Now()
 
 		switch cmd {
 		case cmdHello:
@@ -340,6 +352,10 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.logf("%s: LIST_FILES -> %d entries", addr, len(sessionNodes))
 
 		case cmdReadFile:
+			if gapSinceLastFrame > readFileIdleLogThreshold {
+				s.logf("%s: idle %v before this request (client hadn't asked yet)",
+					addr, gapSinceLastFrame.Round(time.Millisecond))
+			}
 			if len(payload) < 10 {
 				s.logf("%s: READ_FILE payload too short", addr)
 				return
