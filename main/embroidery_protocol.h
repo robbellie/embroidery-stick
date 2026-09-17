@@ -12,7 +12,19 @@
 #define EMBROIDERY_PROTO_VERSION    2   /* v2: proto_file_info_t widened for directory-tree support */
 #define EMBROIDERY_DEFAULT_PORT     7892
 #define EMBROIDERY_MAX_FILES        512   /* caps files+directories combined, not files alone */
-#define EMBROIDERY_CHUNK_SIZE       (8 * 1024)    /* bytes per READ_FILE request */
+/* Bytes per READ_FILE request. Raised from the original 8KB after real-
+ * hardware A/B testing (8/16/32KB, see git history) showed 32KB is a clear
+ * step change, not just an incremental one: several typical embroidery
+ * files are under 32KB and now fetch in a single round trip instead of
+ * 2-3, cutting total fetch time roughly 3x versus 16KB in that test. Not
+ * pushed further: at 32KB × EMBROIDERY_CACHE_SLOTS this already uses a
+ * meaningful fraction of a no-PSRAM board's internal SRAM (verified to
+ * still boot fine on AtomS3U at 4 slots), and the WiFi fetch is already
+ * comfortably faster than the ESP32-S3's own hard ceiling on the far end —
+ * its native USB peripheral is Full-Speed only (12 Mbps, ~1-1.2MB/s
+ * effective), so a faster network fetch stops helping once it's no longer
+ * the slower of the two legs. */
+#define EMBROIDERY_CHUNK_SIZE       (32 * 1024)
 #define EMBROIDERY_ROOT_PARENT_ID   0xFFFF        /* proto_file_info_t.parent_id: entry lives directly in the root */
 
 /*

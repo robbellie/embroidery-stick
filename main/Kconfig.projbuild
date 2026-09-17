@@ -62,11 +62,16 @@ menu "Embroidery Stick Configuration"
 
     config EMBROIDERY_CACHE_SLOTS
         int "Number of cache slots"
-        default 8
+        default 4
         range 4 64
         help
-            Number of 8 KB cache slots. Each slot uses 8 KB of internal DRAM.
-            8 slots = 64 KB total cache.
+            Number of EMBROIDERY_CHUNK_SIZE-sized cache slots (see
+            embroidery_protocol.h). Each slot uses one chunk's worth of
+            internal DRAM — at the default 32 KB chunk size, 4 slots is
+            128 KB total, verified to still boot fine on a no-PSRAM board
+            (AtomS3U). Lowered from the original 8 (when chunks were 8 KB,
+            also 64 KB total) alongside the chunk size increase, to keep
+            total cache RAM from growing further than necessary.
 
     config EMBROIDERY_STUB_MODE
         bool "Stub mode (no backend, hardcoded test files)"
