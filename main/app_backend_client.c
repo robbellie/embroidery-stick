@@ -9,6 +9,8 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <errno.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include "sdkconfig.h"
 
 static const char *TAG = "backend";
@@ -82,6 +84,16 @@ static esp_err_t connect_to_backend(void)
         return ESP_FAIL;
     }
     freeaddrinfo(res);
+
+    /* Every READ_FILE is a small request followed by a wait for the
+     * response — without this, Nagle's algorithm can hold the request
+     * back waiting to coalesce with more outbound data that never comes,
+     * interacting with the backend's own delayed-ACK timer to add real
+     * per-chunk latency for no benefit (nothing here benefits from
+     * coalescing small writes). */
+    int nodelay = 1;
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+
     s.sock = sock;
 
     /* HELLO handshake */
