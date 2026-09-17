@@ -19,6 +19,12 @@ I'll try to help with issues when I can, but response times will vary
 and I can't promise a fix on any particular timeline. Pull requests and
 forks are very welcome.
 
+Sponsorship is never required, but if Embroidery Stick is useful to you
+and you'd like to support its development — it helps fund hardware
+testing and experimenting with new boards and features — I have a
+[GitHub Sponsors page](https://github.com/sponsors/robbellie). It's
+greatly appreciated either way. ❤️
+
 Tested on two boards — the **M5Stack AtomS3U** and the **Waveshare
 ESP32-S3-GEEK** — see [What you need](#what-you-need) below. It will very
 likely work on other ESP32(-S3) boards with native USB too (GPIOs are
