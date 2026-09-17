@@ -300,6 +300,33 @@ func (s *Server) handleConn(conn net.Conn) {
 	const readFileIdleLogThreshold = 50 * time.Millisecond
 	lastFrameAt := time.Now()
 
+	// Aggregates a whole "browsing burst" — e.g. the embroidery machine (or
+	// a host OS) reading through many files back-to-back while generating
+	// thumbnails for a folder — into one summary line, since the per-file
+	// lines above only ever show one file at a time. The protocol has no
+	// explicit "I'm done browsing" signal, so a burst is heuristically
+	// considered over once the connection goes quiet for batchIdleThreshold
+	// — long enough not to be mistaken for a between-file pause, short
+	// enough to close out promptly once browsing has actually stopped.
+	const batchIdleThreshold = 3 * time.Second
+	var batchStart time.Time
+	batchBytes := uint32(0)
+	batchFiles := map[uint16]bool{}
+
+	logBatch := func() {
+		if batchStart.IsZero() || len(batchFiles) == 0 {
+			return
+		}
+		elapsed := time.Since(batchStart)
+		kbps := float64(batchBytes) / 1024 / elapsed.Seconds()
+		s.logf("%s: batch complete: %d files, %d bytes in %v, %.1f KB/s average",
+			addr, len(batchFiles), batchBytes, elapsed.Round(time.Millisecond), kbps)
+		batchStart = time.Time{}
+		batchBytes = 0
+		batchFiles = map[uint16]bool{}
+	}
+	defer logBatch() // flush a still-open batch if the connection just closes
+
 	for {
 		cmd, payload, err := readFrame(conn)
 		if err != nil {
@@ -404,6 +431,15 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.logf("%s: READ_FILE id=%d offset=%d len=%d -> %d bytes", addr, id, offset, length, n)
 
 			if n > 0 {
+				if !batchStart.IsZero() && gapSinceLastFrame > batchIdleThreshold {
+					logBatch() // this request starts a new burst — close out the previous one first
+				}
+				if batchStart.IsZero() {
+					batchStart = time.Now()
+				}
+				batchBytes += uint32(n)
+				batchFiles[id] = true
+
 				if _, started := transferStart[id]; !started {
 					transferStart[id] = time.Now()
 				}
