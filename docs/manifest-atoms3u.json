@@ -1,6 +1,6 @@
 {
   "name": "Embroidery Stick (AtomS3U)",
-  "version": "0.2.1-rc2",
+  "version": "0.2.1-rc3",
   "new_install_prompt_erase": true,
   "builds": [
     {
