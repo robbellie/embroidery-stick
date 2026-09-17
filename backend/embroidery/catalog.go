@@ -153,12 +153,24 @@ func (c *Catalog) buildTree() (*treeNode, error) {
 	root := &treeNode{isDir: true, path: c.rootDir}
 	byPath := map[string]*treeNode{c.rootDir: root}
 
+	// Counted purely for diagnostics (logged below): distinguishes "the
+	// walk saw nothing at all" (wrong/empty folder) from "it saw files,
+	// but none matched the extension filter" (config/extension issue) —
+	// both looked identical as just "0 entries" before this, which made a
+	// real report of the GUI silently serving 0 files impossible to
+	// narrow down remotely.
+	var seenFiles, skippedErr, skippedExt int
+
 	err := filepath.WalkDir(c.rootDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || p == c.rootDir {
+			if err != nil {
+				skippedErr++
+			}
 			return nil
 		}
 		info, ierr := d.Info()
 		if ierr != nil {
+			skippedErr++
 			return nil
 		}
 
@@ -166,8 +178,10 @@ func (c *Catalog) buildTree() (*treeNode, error) {
 		if d.IsDir() {
 			tn = &treeNode{base: strings.ToUpper(d.Name()), fi: info, path: p, isDir: true}
 		} else {
+			seenFiles++
 			ext := strings.ToUpper(filepath.Ext(d.Name()))
 			if !allowedExt[ext] {
+				skippedExt++
 				return nil
 			}
 			tn = &treeNode{
@@ -191,6 +205,8 @@ func (c *Catalog) buildTree() (*treeNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.logf("scanned %s: %d files seen, %d matched extension filter, %d skipped (unreadable), %d skipped (extension)",
+		c.rootDir, seenFiles, seenFiles-skippedExt, skippedErr, skippedExt)
 	return root, nil
 }
 

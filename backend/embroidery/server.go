@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -64,6 +66,27 @@ func (s *Server) logf(format string, args ...any) {
 	log.Printf(format, args...)
 }
 
+// Logs exactly which extensions.conf the CLI/GUI resolved (as an absolute
+// path — ExtConfigPath is normally relative, so the CLI and GUI can
+// silently end up reading two different files if launched from different
+// working directories) and what's actually enabled in it. Added after a
+// real report of the GUI silently serving 0 files from a folder the CLI
+// served fine from the same machine, with no visible reason why.
+func (s *Server) logExtConfig(allowedExt map[string]bool) {
+	abs, err := filepath.Abs(s.cfg.ExtConfigPath)
+	if err != nil {
+		abs = s.cfg.ExtConfigPath
+	}
+	var enabled []string
+	for ext, on := range allowedExt {
+		if on {
+			enabled = append(enabled, ext)
+		}
+	}
+	sort.Strings(enabled)
+	s.logf("extensions config: %s (enabled: %s)", abs, strings.Join(enabled, ", "))
+}
+
 // New validates cfg, loads the extensions file, and builds the initial
 // catalog. It does not bind any network resources yet — call Start() for
 // that. Replaces the previous log.Fatalf-on-error CLI behavior with
@@ -85,6 +108,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("extensions config: %w", err)
 	}
+	s.logExtConfig(allowedExt)
 
 	cat, err := newCatalog(cfg.Dir, allowedExt, s.logf, cfg.OnFileDetected)
 	if err != nil {
