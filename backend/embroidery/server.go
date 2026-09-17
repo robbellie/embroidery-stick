@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Config configures a Server. Dir, Port, and ExtConfigPath are read once
@@ -254,6 +255,17 @@ func (s *Server) handleConn(conn net.Conn) {
 	// on this connection (ids are not stable across catalog reloads).
 	var sessionNodes []node
 
+	// Per-file transfer timing, for measuring the real-world impact of
+	// firmware/network changes (WiFi power-save, TCP_NODELAY, chunk size,
+	// ...) — logged once a file's bytes are fully accounted for, so an A/B
+	// comparison is just: reflash, transfer the same file, compare the
+	// logged KB/s. Deliberately a simple running sum (not tracking exact
+	// byte ranges) — good enough for a controlled benchmark run, where a
+	// file isn't normally read out of order or partially more than once;
+	// not meant as a precise production metric.
+	transferStart := map[uint16]time.Time{}
+	transferBytes := map[uint16]uint32{}
+
 	for {
 		cmd, payload, err := readFrame(conn)
 		if err != nil {
@@ -350,6 +362,21 @@ func (s *Server) handleConn(conn net.Conn) {
 				return
 			}
 			s.logf("%s: READ_FILE id=%d offset=%d len=%d -> %d bytes", addr, id, offset, length, n)
+
+			if n > 0 {
+				if _, started := transferStart[id]; !started {
+					transferStart[id] = time.Now()
+				}
+				transferBytes[id] += uint32(n)
+				if transferBytes[id] >= entry.size {
+					elapsed := time.Since(transferStart[id])
+					kbps := float64(transferBytes[id]) / 1024 / elapsed.Seconds()
+					s.logf("%s: transfer complete: %s (%d bytes in %v, %.1f KB/s)",
+						addr, splitRelDir(s.cfg.Dir, entry.path), transferBytes[id], elapsed.Round(time.Millisecond), kbps)
+					delete(transferStart, id)
+					delete(transferBytes, id)
+				}
+			}
 
 		default:
 			s.logf("%s: unknown cmd 0x%02x, closing", addr, cmd)
