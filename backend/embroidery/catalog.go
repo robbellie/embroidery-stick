@@ -115,7 +115,18 @@ func SaveAllowedExtensions(path string, allowed map[string]bool) error {
 }
 
 func newCatalog(dir string, allowedExt map[string]bool, logf func(string, ...any), onFileDetected func(string, bool)) (*Catalog, error) {
-	c := &Catalog{rootDir: dir, allowedExt: allowedExt, logf: logf, onFileDetected: onFileDetected}
+	// filepath.Clean normalizes to the OS-native separator — required here
+	// on Windows specifically, where Fyne's folder-picker URI.Path() comes
+	// back with forward slashes (e.g. "D:/Some/Folder") while
+	// filepath.WalkDir builds child paths with backslashes internally.
+	// buildTree()'s byPath map is keyed by this exact rootDir string, so an
+	// un-normalized root silently fails every top-level parent lookup
+	// (byPath[filepath.Dir(p)] never matches) — every file gets walked and
+	// counted, then dropped right before being attached to the tree,
+	// producing a catalog with 0 entries and no error at all. A path typed
+	// by hand for the CLI is usually already native-separator, which is
+	// why this only ever showed up through the GUI's folder picker.
+	c := &Catalog{rootDir: filepath.Clean(dir), allowedExt: allowedExt, logf: logf, onFileDetected: onFileDetected}
 	return c, c.reload()
 }
 
