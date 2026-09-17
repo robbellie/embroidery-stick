@@ -156,12 +156,16 @@ func (g *guiApp) onEditExtensions() {
 
 func (g *guiApp) appendLog(msg string) {
 	fyne.Do(func() {
+		// Appends a new segment instead of rebuilding the whole log text
+		// (String() + re-wrap into one segment) on every single line — that
+		// was O(total log length) per call, so it got measurably slower as
+		// a session went on, entirely avoidable since RichText already
+		// supports multiple segments natively.
 		stamp := time.Now().Format("15:04:05")
-		text := g.logView.String() + fmt.Sprintf("[%s] %s\n", stamp, msg)
-		g.logView.Segments = []widget.RichTextSegment{&widget.TextSegment{
+		g.logView.Segments = append(g.logView.Segments, &widget.TextSegment{
 			Style: widget.RichTextStyleInline,
-			Text:  text,
-		}}
+			Text:  fmt.Sprintf("[%s] %s\n", stamp, msg),
+		})
 		g.logView.Refresh()
 	})
 }
