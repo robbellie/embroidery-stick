@@ -115,7 +115,18 @@ func SaveAllowedExtensions(path string, allowed map[string]bool) error {
 }
 
 func newCatalog(dir string, allowedExt map[string]bool, logf func(string, ...any), onFileDetected func(string, bool)) (*Catalog, error) {
-	c := &Catalog{rootDir: dir, allowedExt: allowedExt, logf: logf, onFileDetected: onFileDetected}
+	// filepath.Clean normalizes to the OS-native separator — required here
+	// on Windows specifically, where Fyne's folder-picker URI.Path() comes
+	// back with forward slashes (e.g. "D:/Some/Folder") while
+	// filepath.WalkDir builds child paths with backslashes internally.
+	// buildTree()'s byPath map is keyed by this exact rootDir string, so an
+	// un-normalized root silently fails every top-level parent lookup
+	// (byPath[filepath.Dir(p)] never matches) — every file gets walked and
+	// counted, then dropped right before being attached to the tree,
+	// producing a catalog with 0 entries and no error at all. A path typed
+	// by hand for the CLI is usually already native-separator, which is
+	// why this only ever showed up through the GUI's folder picker.
+	c := &Catalog{rootDir: filepath.Clean(dir), allowedExt: allowedExt, logf: logf, onFileDetected: onFileDetected}
 	return c, c.reload()
 }
 
@@ -136,16 +147,41 @@ type treeNode struct {
 // Directories are always included, even if empty or containing only
 // disallowed extensions — an empty folder is still a folder.
 func (c *Catalog) buildTree() (*treeNode, error) {
+	// Checked explicitly, separately from the walk below: WalkDir's own
+	// error handling here is deliberately tolerant of a single bad entry
+	// deep in the tree (skip it, keep going — see the walk func below), but
+	// that same tolerance would otherwise also swallow the root itself
+	// being unreadable (wrong/stale path, permissions, a folder picker
+	// handing back a malformed path) as a silent, empty catalog instead of
+	// a real error the caller can show the user.
+	if info, err := os.Stat(c.rootDir); err != nil {
+		return nil, fmt.Errorf("cannot access %s: %w", c.rootDir, err)
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("%s is not a directory", c.rootDir)
+	}
+
 	allowedExt := c.getAllowedExt()
 	root := &treeNode{isDir: true, path: c.rootDir}
 	byPath := map[string]*treeNode{c.rootDir: root}
 
+	// Counted purely for diagnostics (logged below): distinguishes "the
+	// walk saw nothing at all" (wrong/empty folder) from "it saw files,
+	// but none matched the extension filter" (config/extension issue) —
+	// both looked identical as just "0 entries" before this, which made a
+	// real report of the GUI silently serving 0 files impossible to
+	// narrow down remotely.
+	var seenFiles, skippedErr, skippedExt int
+
 	err := filepath.WalkDir(c.rootDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || p == c.rootDir {
+			if err != nil {
+				skippedErr++
+			}
 			return nil
 		}
 		info, ierr := d.Info()
 		if ierr != nil {
+			skippedErr++
 			return nil
 		}
 
@@ -153,8 +189,10 @@ func (c *Catalog) buildTree() (*treeNode, error) {
 		if d.IsDir() {
 			tn = &treeNode{base: strings.ToUpper(d.Name()), fi: info, path: p, isDir: true}
 		} else {
+			seenFiles++
 			ext := strings.ToUpper(filepath.Ext(d.Name()))
 			if !allowedExt[ext] {
+				skippedExt++
 				return nil
 			}
 			tn = &treeNode{
@@ -178,6 +216,8 @@ func (c *Catalog) buildTree() (*treeNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.logf("scanned %s: %d files seen, %d matched extension filter, %d skipped (unreadable), %d skipped (extension)",
+		c.rootDir, seenFiles, seenFiles-skippedExt, skippedErr, skippedExt)
 	return root, nil
 }
 
