@@ -54,11 +54,17 @@ jobs:
           CGO_ENABLED: '0'
         run: go test ./cmd/embroidery-backend/... ./embroidery/...
 
-  # Fyne needs CGo + real GL/X11/Wayland headers — a single-platform sanity
-  # build here (release.yml's backend-gui job covers the actual
-  # Windows/Linux/macOS release matrix).
+  # Fyne needs CGo + a real platform GUI toolchain, so this mirrors
+  # release.yml's backend-gui matrix (one native build per OS) rather than
+  # a single Linux-only sanity build — the guiapp package now has real
+  # platform-specific files (known_folders_windows.go/_other.go), which a
+  # Linux-only check would silently never compile at all.
   backend-gui:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -66,9 +72,30 @@ jobs:
           go-version-file: backend/go.mod
           cache: false
       - name: Install Linux GUI build dependencies
+        if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev libgl-dev libegl1-mesa-dev xorg-dev libxkbcommon-dev libwayland-dev wayland-protocols
+      - name: Prefer the runner's own MinGW-w64 (Windows)
+        if: matrix.os == 'windows-latest'
+        # windows-latest ships a working 64-bit MinGW-w64 at C:\mingw64\bin,
+        # but it isn't first on PATH — Strawberry Perl's/MSYS2's gcc can
+        # shadow it, and cgo needs the real one (see release.yml).
+        run: echo "C:\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build
         working-directory: backend
+        shell: bash
         env:
           CGO_ENABLED: '1'
-        run: go build -v ./cmd/embroidery-backend-gui/... ./guiapp/...
+        run: |
+          ext=""
+          [ "${{ matrix.os }}" = "windows-latest" ] && ext=".exe"
+          go vet ./guiapp/...
+          go build -v -o "embroidery-backend-gui-${{ matrix.os }}${ext}" ./cmd/embroidery-backend-gui
+      # Lets someone test a specific PR/branch build without waiting for a
+      # tagged release — download from this run's "Summary" page (Artifacts
+      # section, bottom). Not meant as a distribution channel: artifacts
+      # expire (repo default retention) and aren't discoverable outside the
+      # Actions run itself.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: embroidery-backend-gui-${{ matrix.os }}
+          path: backend/embroidery-backend-gui-${{ matrix.os }}*

@@ -1,12 +1,17 @@
 // Package guiapp is the cross-platform (Linux/Mac/Windows) desktop GUI for
 // the embroidery-stick backend. It imports only embroidery-backend/embroidery
-// (never its own internals from the reverse direction) and Fyne — no
-// platform-specific code, since Fyne's own widgets and dialogs already
-// abstract that away.
+// (never its own internals from the reverse direction) and Fyne — Fyne's
+// own widgets and dialogs abstract away nearly all platform differences.
+// The one deliberate exception is known_folders_windows.go/_other.go:
+// Fyne's Windows folder dialog hard-codes %USERPROFILE%\Desktop for its
+// sidebar shortcut and silently drops the entry when that's wrong (e.g.
+// OneDrive's "Back up your folders" redirects Desktop elsewhere) — see
+// known_folders.go for the real fix.
 package guiapp
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +20,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
 	"embroidery-backend/embroidery"
@@ -34,11 +40,12 @@ type guiApp struct {
 	fyneApp fyne.App
 	win     fyne.Window
 
-	dirEntry  *widget.Label
-	portEntry *widget.Entry
-	browseBtn *widget.Button
-	extBtn    *widget.Button
-	startBtn  *widget.Button
+	dirEntry    *widget.Label
+	portEntry   *widget.Entry
+	browseBtn   *widget.Button
+	oneDriveBtn *widget.Button // nil if no OneDrive root was found at startup
+	extBtn      *widget.Button
+	startBtn    *widget.Button
 
 	statusLabel *widget.Label
 	activity    *activityDot
@@ -68,6 +75,14 @@ func Run() {
 	g.extBtn = widget.NewButton("File types...", g.onEditExtensions)
 	g.startBtn = widget.NewButton("Start", g.onToggleStartStop)
 
+	// Only shown if a OneDrive root actually resolves (mainly a Windows
+	// concern — see known_folders.go): a quick way into a OneDrive tree
+	// without depending on Fyne's own Desktop/Documents sidebar shortcuts,
+	// which silently disappear under Known Folder Move.
+	if root, ok := oneDriveRoot(); ok {
+		g.oneDriveBtn = widget.NewButton("OneDrive...", func() { g.onBrowseFrom(root) })
+	}
+
 	g.statusLabel = widget.NewLabel("Idle")
 	g.activity = newActivityDot()
 
@@ -78,7 +93,11 @@ func Run() {
 	g.logView = widget.NewRichTextWithText("")
 	g.logView.Wrapping = fyne.TextWrapWord
 
-	form := container.NewBorder(nil, nil, widget.NewLabel("Folder:"), g.browseBtn, g.dirEntry)
+	browseButtons := fyne.CanvasObject(g.browseBtn)
+	if g.oneDriveBtn != nil {
+		browseButtons = container.NewHBox(g.oneDriveBtn, g.browseBtn)
+	}
+	form := container.NewBorder(nil, nil, widget.NewLabel("Folder:"), browseButtons, g.dirEntry)
 	portRow := container.NewBorder(nil, nil, widget.NewLabel("Port:"), g.extBtn, g.portEntry)
 	statusRow := container.NewBorder(nil, nil, g.activity.canvasObject(), nil, g.statusLabel)
 
@@ -99,14 +118,59 @@ func Run() {
 	g.win.ShowAndRun()
 }
 
+// onBrowse opens the folder picker. Where it starts: the previously
+// chosen folder if one is already set (so re-browsing doesn't lose your
+// place), otherwise the real Desktop path — resolved via
+// known_folders.go rather than trusting Fyne's own Windows sidebar
+// shortcut, which is hard-coded to %USERPROFILE%\Desktop and silently
+// disappears once OneDrive folder redirection (Known Folder Move) points
+// Desktop elsewhere. Falls through to Fyne's own default location if
+// neither resolves (e.g. non-Windows, or first run with nothing set).
 func (g *guiApp) onBrowse() {
-	dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
+	start := g.dirEntry.Text
+	if start == "" {
+		start, _ = knownFolderPath(knownFolderDesktop)
+	}
+	g.onBrowseFrom(start)
+}
+
+// onBrowseFrom opens the folder picker starting at startPath (empty
+// falls through to Fyne's own default). Shared by onBrowse and the
+// OneDrive quick-access button.
+func (g *guiApp) onBrowseFrom(startPath string) {
+	d := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
 		if err != nil || uri == nil {
 			return
 		}
 		g.dirEntry.SetText(uri.Path())
 		g.fyneApp.Preferences().SetString(prefKeyDir, uri.Path())
-	}, g.win).Show()
+	}, g.win)
+	if startPath != "" {
+		if lister, err := storage.ListerForURI(storage.NewFileURI(startPath)); err == nil {
+			d.SetLocation(lister)
+		}
+	}
+	d.Show()
+}
+
+// oneDriveRoot finds the local OneDrive sync root via the environment
+// variables Windows' OneDrive client sets: OneDrive is the general one
+// (present for either account type), OneDriveCommercial/OneDriveConsumer
+// distinguish a work-or-school vs. personal account when both are signed
+// in on the same machine. First one that's actually set and exists wins.
+// ok is false if none apply (not Windows, OneDrive not installed or not
+// signed in).
+func oneDriveRoot() (string, bool) {
+	for _, envVar := range []string{"OneDrive", "OneDriveCommercial", "OneDriveConsumer"} {
+		p := os.Getenv(envVar)
+		if p == "" {
+			continue
+		}
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // onEditExtensions lets the user pick which embroidery file formats are
@@ -178,9 +242,15 @@ func (g *guiApp) setFieldsEnabled(enabled bool) {
 	if enabled {
 		g.browseBtn.Enable()
 		g.portEntry.Enable()
+		if g.oneDriveBtn != nil {
+			g.oneDriveBtn.Enable()
+		}
 	} else {
 		g.browseBtn.Disable()
 		g.portEntry.Disable()
+		if g.oneDriveBtn != nil {
+			g.oneDriveBtn.Disable()
+		}
 	}
 }
 
