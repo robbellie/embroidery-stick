@@ -4,7 +4,10 @@ go 1.22.0
 
 toolchain go1.22.4
 
-require fyne.io/fyne/v2 v2.8.1
+require (
+	fyne.io/fyne/v2 v2.8.1
+	golang.org/x/sys v0.30.0
+)
 
 require (
 	fyne.io/systray v1.12.3-0.20260810170012-af4e8e793ec4 // indirect
@@ -38,7 +41,6 @@ require (
 	github.com/yuin/goldmark v1.8.2 // indirect
 	golang.org/x/image v0.24.0 // indirect
 	golang.org/x/net v0.35.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
