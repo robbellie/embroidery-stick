@@ -85,4 +85,17 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: '1'
-        run: go build -v ./cmd/embroidery-backend-gui/... ./guiapp/...
+        run: |
+          ext=""
+          [ "${{ matrix.os }}" = "windows-latest" ] && ext=".exe"
+          go vet ./guiapp/...
+          go build -v -o "embroidery-backend-gui-${{ matrix.os }}${ext}" ./cmd/embroidery-backend-gui
+      # Lets someone test a specific PR/branch build without waiting for a
+      # tagged release — download from this run's "Summary" page (Artifacts
+      # section, bottom). Not meant as a distribution channel: artifacts
+      # expire (repo default retention) and aren't discoverable outside the
+      # Actions run itself.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: embroidery-backend-gui-${{ matrix.os }}
+          path: backend/embroidery-backend-gui-${{ matrix.os }}*
